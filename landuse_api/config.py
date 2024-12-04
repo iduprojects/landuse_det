@@ -39,6 +39,8 @@ class APIConfig:
     app: AppConfig
     db: DBConfig
     auth: AuthConfig
+    URBAN_DB_API: str = ""
+    DIG_TP_API: str = ""
 
     @classmethod
     def load(cls, file: str | Path | TextIO) -> "APIConfig":
@@ -55,6 +57,8 @@ class APIConfig:
                 app=AppConfig(**data.get("app", {})),
                 db=DBConfig(**data.get("db", {})),
                 auth=AuthConfig(**data.get("auth", {})),
+                URBAN_DB_API=data.get("URBAN_DB_API", ""),
+                DIG_TP_API=data.get("DIG_TP_API", "")
             )
         except Exception as exc:
             raise ValueError("Could not read app config file") from exc
