@@ -1,4 +1,6 @@
+import asyncio
 import math
+import time
 from typing import Optional
 
 import geopandas as gpd
@@ -10,12 +12,14 @@ from shapely.geometry import box
 
 from landuse_api.schemas import GeoJSON, Profile
 
-from .urban_api_access import get_projects_base_scenario_context_geometries, get_projects_territory
+from .urban_api_access import get_projects_base_scenario_context_geometries, get_projects_territory, \
+    get_buildings_scenario_id, get_physical_objects_geometries
 from .urban_api_access import (
     get_projects_territory,
     get_projects_base_scenario_id,
     get_projects_base_scenario_context_geometries,
     get_scenario_context_geometries,
+    get_functional_zones_scenario_id
 )
 #TODO: В общем воркфлоу такой:
 # 1. Получаем полигоны landuse по проекту из апи
@@ -118,10 +122,25 @@ def extract_landuse_within_polygon(input_polygon):
 
 
 async def extract_landuse(project_id: int) -> gpd.GeoDataFrame:
-    geojson_data = await urban_db_api.get_projects_territory(project_id) #вот тут можно подкорретировать вызов, если я неправильно вызываю метод
+    geojson_data = await get_functional_zones_scenario_id(project_id)
+
+    # Преобразование GeoJSON в GeoDataFrame
     gdf = gpd.GeoDataFrame.from_features(geojson_data, crs="EPSG:4326")
-    # geojson_result = gdf.to_json()
-    # return geojson_result
+
+    # Обработка столбца properties
+    if 'properties' in gdf.columns:
+        gdf['landuse_zone'] = gdf['properties'].apply(lambda x: x.get('landuse_zon') if isinstance(x, dict) else None)
+
+    # Обработка столбца functional_zone_type
+    if 'functional_zone_type' in gdf.columns:
+        gdf['zone_type_id'] = gdf['functional_zone_type'].apply(lambda x: x.get('id') if isinstance(x, dict) else None)
+        gdf['zone_type_name'] = gdf['functional_zone_type'].apply(
+            lambda x: x.get('name') if isinstance(x, dict) else None)
+        gdf['zone_type_nickname'] = gdf['functional_zone_type'].apply(
+            lambda x: x.get('nickname') if isinstance(x, dict) else None)
+
+    # (Опционально) Удаляем исходные столбцы с вложенными данными
+    gdf.drop(columns=['properties', 'functional_zone_type'], inplace=True)
 
     return gdf
 
@@ -301,10 +320,10 @@ async def analyze_and_process_landuse_data(project_id):
         return gpd.GeoDataFrame(columns=["geometry"])
 
     # Обработка данных
-    landuse_data["landuse_zon"] = landuse_data.apply(assign_landuse_zone, axis=1)
-    result_gdf = subtract_polygons(landuse_data)
+    # landuse_data["landuse_zon"] = landuse_data.apply(assign_landuse_zone, axis=1)
+    # result_gdf = subtract_polygons(landuse_data)
 
-    return result_gdf
+    return landuse_data
 
 #TODO: ну тут, возмоно, нужно будет перемапить на наши атрибуты из базы
 def classify_urbanization_levels(geo_dataframe):
@@ -463,70 +482,107 @@ def split_polygon_grid(polygon, num_parts):
     return gpd.GeoDataFrame(geometry=grid).clip(polygon)
 
 
-#TODO: здесь нам не нужен полигон в аргументах, если мы можем получить жилые здания по территории прокета\сценария из апишки базы
-async def extract_and_analyze_buildings_within_polygon(polygon, project_id) -> Optional[gpd.GeoDataFrame]:
-    if polygon is None:
+async def get_buidlings_geom_db(physical_object_ids: list[int], batch_size: int = 50):
+    geometries_data = []
+
+    async def fetch_geometry(obj_id):
+        response = await get_physical_objects_geometries(obj_id)
+        return [
+            {
+                "physical_object_id": obj_id,
+                "object_geometry_id": geometry_entry.get("object_geometry_id"),
+                "geometry": geometry_entry.get("geometry"),  # Полигональная геометрия
+            }
+            for geometry_entry in response
+        ]
+
+    for i in range(0, len(physical_object_ids), batch_size):
+        batch = physical_object_ids[i : i + batch_size]
+        tasks = [fetch_geometry(obj_id) for obj_id in batch]
+        results = await asyncio.gather(*tasks)  # Параллельное выполнение
+        for result in results:
+            geometries_data.extend(result)
+
+    return geometries_data
+
+async def extract_living_area(row):
+    # Пробуем достать из `building_data`, затем напрямую
+    try:
+        building_data = eval(row.get("properties", {}).get("building_data", "{}"))
+        return building_data.get("living_area", None)
+    except:
+        return row.get("living_area", None)
+
+def extract_building_levels(row):
+    try:
+        osm_data = eval(row.get("properties", {}).get("osm_data", "{}"))
+        return osm_data.get("building:levels", None)
+    except:
         return None
 
-    ##TODO: тогда это не нужно
-    buildings = ox.features_from_polygon(polygon.geometry.unary_union, tags={"building": True})
-    print("Здания загружены.")
+#TODO: здесь нам не нужен полигон в аргументах, если мы можем получить жилые здания по территории прокета\сценария из апишки базы
+async def extract_and_analyze_buildings_within_polygon(landuse_polygons, project_id) -> Optional[gpd.GeoDataFrame]:
+    # landuse_polygons = await analyze_and_process_landuse_data(project_id)
+    buildings = await get_buildings_scenario_id(project_id)
+    buildings_gdf = pd.DataFrame(buildings)
+    physical_object_ids = buildings_gdf["physical_object_id"].tolist()
+    start_time = time.time()
+    geometries_data = await get_buidlings_geom_db(physical_object_ids, batch_size=25)
+    geometries_gdf = pd.DataFrame(geometries_data)
+    buildings_with_geom = pd.merge(buildings_gdf, geometries_gdf, on="physical_object_id", how="left")
+    buildings_with_geom['living_area'] = buildings_with_geom['living_building'].apply(extract_living_area)
+    buildings_with_geom['building_levels'] = buildings_with_geom['living_building'].apply(extract_building_levels)
+    end_time = time.time()
+    final_time = end_time - start_time
+    print(f"Время выполнения: {final_time} секунд")
 
-    ##TODO: если у нас в базе здания только полигонами, то это тоже не нужно
-    # Фильтруем только полигоны и многоугольники
-    buildings = buildings[buildings["geometry"].geom_type.isin(["Polygon", "MultiPolygon"])].copy()
-    print("Здания отфильтрованы.")
 
-    ##TODO:не нужно
-    # Проверка валидности геометрий
-    buildings["geometry"] = buildings["geometry"].buffer(0)
-    print("Геометрии зданий исправлены.")
 
     ##TODO: если нам приходят только жилые здания, то не нужно фильтровать по is_living, но жилую площадь нужно достать в атрибутах зданий
     # Определяем жилые здания и вычисляем их площадь
-    buildings["is_living"] = buildings.apply(is_living_building, axis=1)
-    ##TODO:если мы можем достать жилую площадь из зданий, то вообще не нужна эта фкнция
-    buildings = calculate_living_area(buildings)
-    print("Площадь вычислена.")
+    # buildings["is_living"] = buildings.apply(is_living_building, axis=1)
+    # ##TODO:если мы можем достать жилую площадь из зданий, то вообще не нужна эта фкнция
+    # buildings = calculate_living_area(buildings)
+    # print("Площадь вычислена.")
 
     ##TODO: Просто получаем полигоны зон через наш метод обращения к апи урбан дб
-    landuse_polygons = await analyze_and_process_landuse_data(project_id)
+    # landuse_polygons = await analyze_and_process_landuse_data(project_id)
     # landuse_polygons = await extract_landuse(project_id)
     print("Полигоны зон загружены.")
 
-    ##TODO: не преобразовываем CRS, удалить
-    #-------------------------------
-    # Проверка CRS и преобразование
-    if buildings.crs is None:
-        buildings = buildings.set_crs("EPSG:4326")
-    if landuse_polygons.crs is None:
-        landuse_polygons = landuse_polygons.set_crs("EPSG:4326")
-
-    buildings = buildings.to_crs("EPSG:3857")
-    landuse_polygons = landuse_polygons.to_crs("EPSG:3857")
-    print("CRS преобразован.")
-    # -------------------------------
+    # ##TODO: не преобразовываем CRS, удалить
+    # #-------------------------------
+    # # Проверка CRS и преобразование
+    # if buildings.crs is None:
+    #     buildings = buildings.set_crs("EPSG:4326")
+    # if landuse_polygons.crs is None:
+    #     landuse_polygons = landuse_polygons.set_crs("EPSG:4326")
+    #
+    # buildings = buildings.to_crs("EPSG:3857")
+    # landuse_polygons = landuse_polygons.to_crs("EPSG:3857")
+    # print("CRS преобразован.")
+    # # -------------------------------
 
     ##TODO: Тут он объединяет полигоны landuse и смотрит, какие здания в эти полигоны попадают
     try:
         landuse_union = unary_union(landuse_polygons.geometry)
-        buildings_within_landuse = buildings[buildings.geometry.within(landuse_union)]
+        buildings_within_landuse = buildings_with_geom[buildings_with_geom.geometry.within(landuse_union)]
     except Exception as e:
         print(f"Ошибка при фильтрации зданий внутри зон: {e}")
         return None
 
     ##TODO:эта функция уже не нужна
     #--------------------------------------
-    landuse_polygons = refine_boundary_with_osm_data(polygon, landuse_polygons)
+    # landuse_polygons = refine_boundary_with_osm_data(polygon, landuse_polygons)
     # --------------------------------------
 
     landuse_polygons[["ИЖС", "Малоэтажная", "Среднеэтажная", "Многоэтажная"]] = 0.0
 
     ##TODO:удалить
     # --------------------------------------
-    local_crs = buildings_within_landuse.estimate_utm_crs()
-    buildings_within_landuse.to_crs(local_crs, inplace=True)
-    landuse_polygons.to_crs(local_crs, inplace=True)
+    # local_crs = buildings_within_landuse.estimate_utm_crs()
+    # buildings_within_landuse.to_crs(local_crs, inplace=True)
+    # landuse_polygons.to_crs(local_crs, inplace=True)
     # --------------------------------------
 
     ##TODO:нужно для логики, но при необходимости можно переписать
@@ -583,8 +639,8 @@ async def extract_and_analyze_buildings_within_polygon(polygon, project_id) -> O
     return result
 
 ##TODO:Подогнать под изменения логики выше, оставить нужные расчёты
-async def analyze_geojson_for_renovation_potential(file_path, excluded_zone, project_id):
-    geo_data = await extract_and_analyze_buildings_within_polygon(file_path, project_id)
+async def analyze_geojson_for_renovation_potential(landuse_polygons, excluded_zone, project_id):
+    geo_data = await extract_and_analyze_buildings_within_polygon(landuse_polygons, project_id)
 
     geo_data["Площадь"] = geo_data.geometry.area
 
@@ -627,9 +683,10 @@ async def analyze_geojson_for_renovation_potential(file_path, excluded_zone, pro
 async def get_projects_renovation_potential(project_id: int, profile: Profile) -> GeoJSON:
     """Calculate renovation potential for project."""
 
-    geojson = await get_projects_territory(project_id)
-    gdf = gpd.GeoDataFrame.from_features(GeoJSON.from_geometry(geojson.get("geometry")), crs="EPSG:4326")
-    result_gdf = await analyze_geojson_for_renovation_potential(gdf, profile, project_id)
+    # geojson = await get_projects_territory(project_id)
+    landuse_polygons = await extract_landuse(project_id)
+    # gdf = gpd.GeoDataFrame.from_features(GeoJSON.from_geometry(geojson.get("geometry")), crs="EPSG:4326")
+    result_gdf = await analyze_geojson_for_renovation_potential(landuse_polygons, profile, project_id)
     filtered_gdf = result_gdf[result_gdf["Потенциал"] == "Подлежит реновации"]
     return GeoJSON.from_geodataframe(filtered_gdf)
 

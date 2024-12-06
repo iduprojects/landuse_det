@@ -2,7 +2,8 @@
 __pycache__/
 *.py[cod]
 *$py.class
-config.yaml
+landuse_api/config.yaml
+
 
 # C extensions
 *.so
