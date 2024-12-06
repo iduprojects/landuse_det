@@ -1,41 +1,29 @@
 """Geojson response models are defined here."""
 
-import json
-from dataclasses import asdict, dataclass, field
 from typing import Any, Literal
 
-import shapely.geometry as geom
+import geopandas as gpd
 from geojson_pydantic import Feature, FeatureCollection
+from shapely.geometry import mapping
 
 
-@dataclass
-class GeoJSON:
-    features: list[Feature]
-    type: str = "FeatureCollection"
-
-    def as_dict(self) -> dict[str, Any]:
-        features = []
-        for feature in self.features:
-            features.append(feature.as_dict())
-        self.features = features
-        return asdict(self)
-
-    def as_json(self) -> str:
-        return json.dumps(self.as_dict(), ensure_ascii=False, indent=2)
+class GeoJSON(FeatureCollection):
+    type: Literal["FeatureCollection"] = "FeatureCollection"
 
     @classmethod
-    def empty(cls) -> "GeoJSON":
-        return cls(features=[])
+    def from_features_list(cls, features: list[dict[str, Any]]) -> "GeoJSON":
+        feature_collection = []
+        for feature in features:
+            properties = dict(feature)
+            geometry = properties.pop("geometry", None)
+            feature_collection.append(Feature(type="Feature", geometry=geometry, properties=properties))
+        return cls(features=feature_collection)
 
-
-@dataclass
-class Feature:
-    geometry: geom.MultiPolygon | geom.Polygon
-    properties: dict[str, Any] = field(default_factory=dict)
-    type: str = "Feature"
-
-    def as_dict(self) -> dict[str, Any]:
-        return asdict(self)
-
-    def as_json(self) -> str:
-        return json.dumps(self.as_dict(), ensure_ascii=False, indent=2)
+    @classmethod
+    def from_geodataframe(cls, gdf: gpd.GeoDataFrame) -> "GeoJSON":
+        feature_collection = []
+        for _, row in gdf.iterrows():
+            geometry = mapping(row.geometry)
+            properties = row.drop("geometry").to_dict()
+            feature_collection.append(Feature(type="Feature", geometry=geometry, properties=properties))
+        return cls(features=feature_collection)
