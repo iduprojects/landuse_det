@@ -17,6 +17,6 @@ class LanduseServiceImpl(LanduseService):
         """Calculate renovation potential for project."""
         return await get_projects_renovation_potential(project_id, profile)
 
-    async def get_urbanization_level(self, project_id: int) -> GeoJSON:
+    async def get_urbanization_level(self, project_id: int, profile: Profile) -> GeoJSON:
         """Calculate urbanization level for project."""
-        return await get_projects_urbanization_level(project_id)
+        return await get_projects_urbanization_level(project_id, profile)

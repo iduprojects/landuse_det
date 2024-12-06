@@ -578,8 +578,9 @@ async def get_projects_renovation_potential(project_id: int, profile: Profile) -
     return GeoJSON.from_geodataframe(result)
 
 
-async def get_projects_urbanization_level(project_id: int) -> GeoJSON:
+async def get_projects_urbanization_level(project_id: int, profile: Profile) -> GeoJSON:
     """Calculate urbanization level for project."""
+
     geojson = await get_projects_base_scenario_context_geometries(project_id)
     gdf = gpd.GeoDataFrame.from_features(geojson, crs="EPSG:4326")
     result = await analyze_geojson_for_renovation_potential(gdf, profile, project_id)

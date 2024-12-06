@@ -33,10 +33,11 @@ async def get_projects_renovation_potential(
 )
 async def get_projects_urbanization_level(
     request: Request,
+    profile: Profile,
     project_id: int = Path(..., description="project identifier"),
 ) -> GeoJSON:
     """Calculate urbanization level for project."""
 
     landuse_service: LanduseService = request.state.landuse_service
 
-    return await landuse_service.get_urbanization_level(project_id)
+    return await landuse_service.get_urbanization_level(project_id, profile)

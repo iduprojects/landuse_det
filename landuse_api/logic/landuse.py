@@ -14,5 +14,5 @@ class LanduseService(Protocol):
         """Calculate renovation potential for project."""
 
     @abc.abstractmethod
-    async def get_urbanization_level(self, project_id: int) -> GeoJSON:
+    async def get_urbanization_level(self, project_id: int, profile: Profile) -> GeoJSON:
         """Calculate urbanization level for project."""
