@@ -14,7 +14,7 @@ from sqlalchemy import cast, select
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.asyncio import AsyncConnection
 
-from landuse_api.db.entities import projects_data, territories_data, scenarios_data
+from landuse_api.db.entities import projects_data, scenarios_data, territories_data
 from landuse_api.exceptions import AccessDeniedError, EntityNotFoundById
 from landuse_api.logic.api.urban_db_api_gateway import urban_db_api
 from landuse_api.schemas import Feature, GeoJSON, Profile
@@ -98,6 +98,7 @@ def extract_landuse_within_polygon(input_polygon):
     print("Результирующий GeoDataFrame пуст.")
     return gpd.GeoDataFrame(columns=["geometry"])
 
+
 async def extract_landuse(project_id: int) -> gpd.GeoDataFrame:
     geojson_data = await urban_db_api.fetch_territories(project_id)
     gdf = gpd.GeoDataFrame.from_features(geojson_data, crs="EPSG:4326")
@@ -105,6 +106,7 @@ async def extract_landuse(project_id: int) -> gpd.GeoDataFrame:
     # return geojson_result
 
     return gdf
+
 
 def assign_landuse_zone(row):
     landuse_mapping = {
@@ -476,9 +478,7 @@ async def extract_and_analyze_buildings_within_polygon(polygon, project_id) -> O
     # Объединяем зоны и фильтруем здания
     try:
         landuse_union = unary_union(landuse_polygons.geometry)
-        buildings_within_landuse = buildings[
-            buildings.geometry.within(landuse_union)
-        ]
+        buildings_within_landuse = buildings[buildings.geometry.within(landuse_union)]
     except Exception as e:
         print(f"Ошибка при фильтрации зданий внутри зон: {e}")
         return None
@@ -492,9 +492,7 @@ async def extract_and_analyze_buildings_within_polygon(polygon, project_id) -> O
     landuse_polygons.to_crs(local_crs, inplace=True)
 
     for idx, zone in landuse_polygons.iterrows():
-        buildings_in_zone = buildings_within_landuse[
-            buildings_within_landuse.geometry.within(zone.geometry)
-        ]
+        buildings_in_zone = buildings_within_landuse[buildings_within_landuse.geometry.within(zone.geometry)]
 
         percentages = calculate_building_percentages(buildings_in_zone)
 
@@ -577,24 +575,64 @@ async def analyze_geojson_for_renovation_potential(file_path, excluded_zone, pro
     return geo_data
 
 
+async def get_projects_renovation_potential(
+    conn: AsyncConnection, project_id: int, profile: Profile, user_id: str
+) -> GeoJSON:
+    """Calculate renovation potential for project."""
+
+    gms = await urban_db_api.get("/scenarios/123/context/geometries")
+    print(gms)
+
+    # ctx_name = "context"
+    # if ctx_name not in result.properties.keys():
+    #     return GeoJSON.empty()
+    # ctx = result.properties.get(ctx_name)
+    #
+    # statement = select(cast(ST_AsGeoJSON(territories_data.c.geometry), JSONB).label("geometry")).where(
+    #     territories_data.c.territory_id.in_(ctx)
+    # )
+    # geometries = (await conn.execute(statement)).mappings().all()
+    # features = [Feature(geometry=geometry.get("geometry")) for geometry in geometries]
+    # geojsons = [GeoJSON(features=[feature]) for feature in features]
+    #
+    # result = GeoJSON.empty()
+    # for geojson in geojsons:
+    #     filename = f"{hash(time.time())}.geojson"
+    #     try:
+    #         with open(filename, "w") as f:
+    #             print(geojson.as_json(), file=f)
+    #         geojson_file_path = gpd.read_file(filename)
+    #         combined_data = await analyze_geojson_for_renovation_potential(geojson_file_path, profile, project_id=scenario_id)
+    #         result.features.append(combined_data.get("features"))
+    #     finally:
+    #         os.remove(filename)
+    #
+    # return result
+
+
 # async def get_projects_renovation_potential(
 #     conn: AsyncConnection, project_id: int, profile: Profile, user_id: str
 # ) -> GeoJSON:
-#     pass
 #     """Calculate renovation potential for project."""
 #
+#     # Получение данных проекта
 #     statement = select(projects_data).where(projects_data.c.project_id == project_id)
 #     result = (await conn.execute(statement)).mappings().one_or_none()
+#
+#     if result is None:
+#         raise EntityNotFoundById(project_id, "project")
+#     if result.user_id != user_id and result.public is False:
+#         raise AccessDeniedError(project_id, "project")
+#
 #
 #     statement = select(scenarios_data.c.scenario_id).where(
 #         (scenarios_data.c.project_id == project_id) & (scenarios_data.c.is_based == True)
 #     )
 #     scenario_id = (await conn.execute(statement)).scalar_one_or_none()
 #
-#     if result is None:
-#         raise EntityNotFoundById(project_id, "project")
-#     if result.user_id != user_id and result.public is False:
-#         raise AccessDeniedError(project_id, "project")
+#     if scenario_id is None:
+#         raise EntityNotFoundById(project_id, "scenario with is_based=True")
+#
 #
 #     ctx_name = "context"
 #     if ctx_name not in result.properties.keys():
@@ -606,63 +644,13 @@ async def analyze_geojson_for_renovation_potential(file_path, excluded_zone, pro
 #     )
 #     geometries = (await conn.execute(statement)).mappings().all()
 #     features = [Feature(geometry=geometry.get("geometry")) for geometry in geometries]
-#     geojsons = [GeoJSON(features=[feature]) for feature in features]
 #
-#     result = GeoJSON.empty()
-#     for geojson in geojsons:
-#         filename = f"{hash(time.time())}.geojson"
-#         try:
-#             with open(filename, "w") as f:
-#                 print(geojson.as_json(), file=f)
-#             geojson_file_path = gpd.read_file(filename)
-#             combined_data = await analyze_geojson_for_renovation_potential(geojson_file_path, profile, project_id=scenario_id)
-#             result.features.append(combined_data.get("features"))
-#         finally:
-#             os.remove(filename)
+#     geojson = GeoJSON(features=features)
+#     combined_data = await analyze_geojson_for_renovation_potential(geojson, profile, project_id=scenario_id)
+#
+#     result = GeoJSON(features=combined_data.get("features"))
 #
 #     return result
-
-async def get_projects_renovation_potential(
-    conn: AsyncConnection, project_id: int, profile: Profile, user_id: str
-) -> GeoJSON:
-    """Calculate renovation potential for project."""
-
-    # Получение данных проекта
-    statement = select(projects_data).where(projects_data.c.project_id == project_id)
-    result = (await conn.execute(statement)).mappings().one_or_none()
-
-    if result is None:
-        raise EntityNotFoundById(project_id, "project")
-    if result.user_id != user_id and result.public is False:
-        raise AccessDeniedError(project_id, "project")
-
-
-    statement = select(scenarios_data.c.scenario_id).where(
-        (scenarios_data.c.project_id == project_id) & (scenarios_data.c.is_based == True)
-    )
-    scenario_id = (await conn.execute(statement)).scalar_one_or_none()
-
-    if scenario_id is None:
-        raise EntityNotFoundById(project_id, "scenario with is_based=True")
-
-
-    ctx_name = "context"
-    if ctx_name not in result.properties.keys():
-        return GeoJSON.empty()
-    ctx = result.properties.get(ctx_name)
-
-    statement = select(cast(ST_AsGeoJSON(territories_data.c.geometry), JSONB).label("geometry")).where(
-        territories_data.c.territory_id.in_(ctx)
-    )
-    geometries = (await conn.execute(statement)).mappings().all()
-    features = [Feature(geometry=geometry.get("geometry")) for geometry in geometries]
-
-    geojson = GeoJSON(features=features)
-    combined_data = await analyze_geojson_for_renovation_potential(geojson, profile, project_id=scenario_id)
-
-    result = GeoJSON(features=combined_data.get("features"))
-
-    return result
 
 # geojson_file_path = "in.txt"
 # geojson_file_path = gpd.read_file(geojson_file_path)

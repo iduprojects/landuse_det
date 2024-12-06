@@ -58,7 +58,7 @@ class APIConfig:
                 db=DBConfig(**data.get("db", {})),
                 auth=AuthConfig(**data.get("auth", {})),
                 URBAN_DB_API=data.get("URBAN_DB_API", ""),
-                DIG_TP_API=data.get("DIG_TP_API", "")
+                DIG_TP_API=data.get("DIG_TP_API", ""),
             )
         except Exception as exc:
             raise ValueError("Could not read app config file") from exc
