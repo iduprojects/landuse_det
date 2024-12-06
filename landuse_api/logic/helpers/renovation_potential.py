@@ -8,10 +8,9 @@ import pandas as pd
 from shapely import unary_union
 from shapely.geometry import box
 
-from landuse_api.logic.api import urban_db_api
 from landuse_api.schemas import GeoJSON, Profile
 
-from .urban_api_access import get_projects_base_scenario_context_geometries, get_projects_territory
+from .urban_api_access import get_projects_territory
 
 
 def extract_landuse_within_polygon(input_polygon):

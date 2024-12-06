@@ -9,8 +9,7 @@ from landuse_api.db import PostgresConnectionManager
 from landuse_api.handlers import list_of_routes
 from landuse_api.info import API_DESCRIPTION, API_TITLE, CONFIG_PATH, LAST_UPDATE, VERSION
 from landuse_api.logic.impl import LanduseServiceImpl
-from landuse_api.middlewares import AuthenticationMiddleware, ExceptionHandlerMiddleware, PassServicesDependencies
-from landuse_api.utils import AuthenticationClient
+from landuse_api.middlewares import ExceptionHandlerMiddleware, PassServicesDependencies
 
 
 def bind_routes(application: FastAPI, prefix: str) -> None:
@@ -56,7 +55,6 @@ def get_app(prefix: str = "/api") -> FastAPI:
     )
 
     connection_manager = PostgresConnectionManager("", 0, "", "", "", 0, "")
-    auth_client = AuthenticationClient(0, 0, False, "")
 
     application.add_middleware(
         ExceptionHandlerMiddleware,
@@ -66,10 +64,6 @@ def get_app(prefix: str = "/api") -> FastAPI:
         PassServicesDependencies,
         connection_manager=connection_manager,  # reinitialized on startup
         landuse_service=LanduseServiceImpl,
-    )
-    application.add_middleware(
-        AuthenticationMiddleware,
-        auth_client=auth_client,  # reinitialized on startup
     )
 
     return application
@@ -97,14 +91,6 @@ async def lifespan(application: FastAPI):
             await connection_manager.refresh()
         elif middleware.cls == ExceptionHandlerMiddleware:
             middleware.kwargs["debug"][0] = app_config.app.debug
-        elif middleware.cls == AuthenticationMiddleware:
-            auth_client: AuthenticationClient = middleware.kwargs["auth_client"]
-            auth_client.update(
-                app_config.auth.cache_size,
-                app_config.auth.cache_ttl,
-                app_config.auth.validate,
-                app_config.auth.url,
-            )
 
     yield
 
