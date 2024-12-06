@@ -574,14 +574,15 @@ async def get_projects_renovation_potential(project_id: int, profile: Profile) -
 
     geojson = await get_projects_territory(project_id)
     gdf = gpd.GeoDataFrame.from_features(GeoJSON.from_geometry(geojson.get("geometry")), crs="EPSG:4326")
-    result = await analyze_geojson_for_renovation_potential(gdf, profile, project_id)
-    return GeoJSON.from_geodataframe(result)
+    result_gdf = await analyze_geojson_for_renovation_potential(gdf, profile, project_id)
+    filtered_gdf = result_gdf[result_gdf["Потенциал"] == "Подлежит реновации"]
+    return GeoJSON.from_geodataframe(filtered_gdf)
 
 
 async def get_projects_urbanization_level(project_id: int, profile: Profile) -> GeoJSON:
     """Calculate urbanization level for project."""
 
-    geojson = await get_projects_base_scenario_context_geometries(project_id)
-    gdf = gpd.GeoDataFrame.from_features(geojson, crs="EPSG:4326")
+    geojson = await get_projects_territory(project_id)
+    gdf = gpd.GeoDataFrame.from_features(GeoJSON.from_geometry(geojson.get("geometry")), crs="EPSG:4326")
     result = await analyze_geojson_for_renovation_potential(gdf, profile, project_id)
     return GeoJSON.from_geodataframe(result)
