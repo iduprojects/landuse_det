@@ -10,7 +10,7 @@ from shapely.geometry import box
 
 from landuse_api.schemas import GeoJSON, Profile
 
-from .urban_api_access import get_projects_territory
+from .urban_api_access import get_projects_base_scenario_context_geometries, get_projects_territory
 
 
 def extract_landuse_within_polygon(input_polygon):
@@ -582,6 +582,25 @@ async def get_projects_urbanization_level(project_id: int, profile: Profile) -> 
     """Calculate urbanization level for project."""
 
     geojson = await get_projects_territory(project_id)
+    gdf = gpd.GeoDataFrame.from_features(GeoJSON.from_geometry(geojson.get("geometry")), crs="EPSG:4326")
+    result = await analyze_geojson_for_renovation_potential(gdf, profile, project_id)
+    return GeoJSON.from_geodataframe(result)
+
+
+async def get_projects_context_renovation_potential(project_id: int, profile: Profile) -> GeoJSON:
+    """Calculate renovation potential for project's context."""
+
+    geojson = await get_projects_base_scenario_context_geometries(project_id)
+    gdf = gpd.GeoDataFrame.from_features(GeoJSON.from_geometry(geojson.get("geometry")), crs="EPSG:4326")
+    result_gdf = await analyze_geojson_for_renovation_potential(gdf, profile, project_id)
+    filtered_gdf = result_gdf[result_gdf["Потенциал"] == "Подлежит реновации"]
+    return GeoJSON.from_geodataframe(filtered_gdf)
+
+
+async def get_projects_context_urbanization_level(project_id: int, profile: Profile) -> GeoJSON:
+    """Calculate urbanization level for project's context."""
+
+    geojson = await get_projects_base_scenario_context_geometries(project_id)
     gdf = gpd.GeoDataFrame.from_features(GeoJSON.from_geometry(geojson.get("geometry")), crs="EPSG:4326")
     result = await analyze_geojson_for_renovation_potential(gdf, profile, project_id)
     return GeoJSON.from_geodataframe(result)
