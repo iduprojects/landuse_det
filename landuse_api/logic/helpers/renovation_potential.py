@@ -12,8 +12,33 @@ from landuse_api.logic.api import urban_db_api
 from landuse_api.schemas import GeoJSON, Profile
 
 from .urban_api_access import get_projects_base_scenario_context_geometries, get_projects_territory
+from .urban_api_access import (
+    get_projects_territory,
+    get_projects_base_scenario_id,
+    get_projects_base_scenario_context_geometries,
+    get_scenario_context_geometries,
+)
+#TODO: В общем воркфлоу такой:
+# 1. Получаем полигоны landuse по проекту из апи
+# 2. Получаем здания по территории этого проекта или контексту (с атрибутами этажности, площади, жилой площади) из апи
+# 3. Найти пересекающиеися с полигонами landuse здания
+# 4. Присвоить нужные атрибуты полигонам landuse и выдать на выходе геоджеусонку с геометрией и атрибутами:
+# "ИЖС",
+# "Малоэтажная",
+# "Среднеэтажная",
+# "Многоэтажная",
+# "geometry",
+# "landuse_zon",
+# "Любые дома /на зону",
+# "Только жилые дома /на зону",
+# "Застройка",
+# "Процент урбанизации",
+# -----------------------
+# Ну и проверяй полигоны и здания, которые мы получаем из урбан апи на премдет атрибутов, что тебе там приходит
 
 
+
+#TODO: эту функцию меняем на обращение в api, которое нам вернёт территории. Смотреть на extract_landuse (102 строка)
 def extract_landuse_within_polygon(input_polygon):
     """
     Выгружает объекты landuse из заданного полигона.
@@ -93,15 +118,15 @@ def extract_landuse_within_polygon(input_polygon):
     return gpd.GeoDataFrame(columns=["geometry"])
 
 
-# async def extract_landuse(project_id: int) -> gpd.GeoDataFrame:
-#     geojson_data = await urban_db_api.fetch_territories(project_id)
-#     gdf = gpd.GeoDataFrame.from_features(geojson_data, crs="EPSG:4326")
-#     # geojson_result = gdf.to_json()
-#     # return geojson_result
-#
-#     return gdf
+async def extract_landuse(project_id: int) -> gpd.GeoDataFrame:
+    geojson_data = await urban_db_api.get_projects_territory(project_id) #вот тут можно подкорретировать вызов, если я неправильно вызываю метод
+    gdf = gpd.GeoDataFrame.from_features(geojson_data, crs="EPSG:4326")
+    # geojson_result = gdf.to_json()
+    # return geojson_result
 
+    return gdf
 
+#TODO: Если у нас в extract_landuse возвращаются те же самые типы landuse, которые тут мапит Егор, то эта функция не нужна
 def assign_landuse_zone(row):
     landuse_mapping = {
         "industrial": "Industrial",
@@ -159,7 +184,8 @@ def assign_landuse_zone(row):
 
     return landuse_zone
 
-
+#TODO: Вчера Наташа говорила, что у нас и так всё обрезано по воде, поэтому эти два метода не нужны.
+# loading_water_osm загружает воду с ОСМ, refine_boundary_with_osm_data вычитает полигоны водных объектов из полигона территорий
 def loading_water_osm(boundary_gdf):
     try:
         osm_objects = ox.geometries_from_polygon(
@@ -171,7 +197,29 @@ def loading_water_osm(boundary_gdf):
 
     return osm_objects
 
+def refine_boundary_with_osm_data(boundary_gdf, objects_gdf):
+    osm_objects = loading_water_osm(boundary_gdf)
 
+    boundary_polygon = boundary_gdf.geometry.unary_union
+
+    result_polygon = (
+        boundary_polygon.difference(osm_objects.geometry.unary_union) if not osm_objects.empty else boundary_polygon
+    )
+    remaining_polygon = result_polygon.difference(objects_gdf.geometry.unary_union)
+
+    if remaining_polygon.is_empty:
+        print("Оставшийся полигон пуст, ничего не будет объединено.")
+        return objects_gdf, gpd.GeoDataFrame()
+
+    num_parts = 25
+    smaller_gdf = split_polygon_grid(remaining_polygon, num_parts)
+
+    updated_objects_gdf = pd.concat([objects_gdf, smaller_gdf], ignore_index=True)
+
+    return updated_objects_gdf
+
+#TODO: эта функция нужна для вычитания полигонов landuse если они пересекаются (потому что он выгружал их с ОСМ)
+# Если landuse мы получаем из базы, то там по идее полигоны не должны пересекаться, так что эта функция не нужна
 def subtract_polygons(landuse_gdf):
     # Фильтруем невалидные геометрии
     landuse_gdf = landuse_gdf[landuse_gdf.geometry.is_valid]
@@ -242,21 +290,24 @@ def subtract_polygons(landuse_gdf):
 
     return result_gdf
 
-
-def analyze_and_process_landuse_data(landuse_data):
+#TODO: эта функция, возможно, тоже не нужна, потому что тут он просто вызывает функции выше для чистки пересечений (зонами и водой с ОСМ) и мапинга landuse
+async def analyze_and_process_landuse_data(project_id):
     """
     Производит операции с выгруженными данными landuse.
     """
-    landuse_data = extract_landuse_within_polygon(landuse_data)
+    # Асинхронный вызов
+    landuse_data = await extract_landuse(project_id)
+
     if landuse_data.empty:
         return gpd.GeoDataFrame(columns=["geometry"])
 
+    # Обработка данных
     landuse_data["landuse_zon"] = landuse_data.apply(assign_landuse_zone, axis=1)
     result_gdf = subtract_polygons(landuse_data)
 
     return result_gdf
 
-
+#TODO: ну тут, возмоно, нужно будет перемапить на наши атрибуты из базы
 def classify_urbanization_levels(geo_dataframe):
     geo_dataframe.loc[
         geo_dataframe["natural"].notnull() & (geo_dataframe["landuse_zon"] == "Recreation"), "Процент урбанизации"
@@ -280,7 +331,8 @@ def classify_urbanization_levels(geo_dataframe):
 
     return geo_dataframe
 
-
+#TODO: тут нам нужны жилые дома из апишек и их этажность. Поэтому логика фильтрации меняется в зависимости от этого.
+# Получаем здания, которые нам нужны, считаем их количество, мапим по этажности и примерно также считаем percentages
 def calculate_building_percentages(df):
     # Фильтруем только те строки, где is_living равно 1 и есть значение в building:levels
     df_buildings = df[(df["is_living"] == 1) & (df["building:levels"].notna())]
@@ -302,7 +354,8 @@ def calculate_building_percentages(df):
 
     return pd.Series(percentages)
 
-
+#TODO: тут нам нужны жилые дома из апишек и их площади. Поэтому логика фильтрации меняется в зависимости от этого.
+# Получаем здания, которые нам нужны, считаем их площади (обычная и жилая), и примерно также считаем percentages
 def calculate_area_percentage(buildings_in_zone, zone):
     zone_area = zone.geometry.area if hasattr(zone, "geometry") else 0
 
@@ -329,7 +382,7 @@ def calculate_area_percentage(buildings_in_zone, zone):
 
     return area_percentage, living_area_percentage
 
-
+##TODO:нужно для логики присовения застройки
 def assign_development_type(gdf):
     gdf["Застройка"] = None
     gdf["Процент урбанизации"] = None
@@ -362,7 +415,7 @@ def assign_development_type(gdf):
 
     return gdf
 
-
+##TODO:если мы из апишек и так можем получать жилые здания по нужной территории, то это можно убрать
 def is_living_building(row: gpd.GeoSeries):
     return (
         1
@@ -370,7 +423,7 @@ def is_living_building(row: gpd.GeoSeries):
         else 0
     )
 
-
+##TODO:если мы из апишек и так можем получать жилые здания по нужной территории и считать\получать их жилую площадь, то эта можно убрать
 def calculate_living_area(source: gpd.GeoDataFrame):
     df = source.copy()
     df["area"] = df.to_crs(3857).geometry.area.astype(float)
@@ -396,7 +449,7 @@ def calculate_living_area(source: gpd.GeoDataFrame):
         return df
     raise ValueError("GeoDataFrame пустой.")
 
-
+#TODO:это для логики с водой, можно убрать
 def split_polygon_grid(polygon, num_parts):
     minx, miny, maxx, maxy = polygon.bounds
 
@@ -411,54 +464,39 @@ def split_polygon_grid(polygon, num_parts):
     return gpd.GeoDataFrame(geometry=grid).clip(polygon)
 
 
-def refine_boundary_with_osm_data(boundary_gdf, objects_gdf):
-    osm_objects = loading_water_osm(boundary_gdf)
-
-    boundary_polygon = boundary_gdf.geometry.unary_union
-
-    result_polygon = (
-        boundary_polygon.difference(osm_objects.geometry.unary_union) if not osm_objects.empty else boundary_polygon
-    )
-    remaining_polygon = result_polygon.difference(objects_gdf.geometry.unary_union)
-
-    if remaining_polygon.is_empty:
-        print("Оставшийся полигон пуст, ничего не будет объединено.")
-        return objects_gdf, gpd.GeoDataFrame()
-
-    num_parts = 25
-    smaller_gdf = split_polygon_grid(remaining_polygon, num_parts)
-
-    updated_objects_gdf = pd.concat([objects_gdf, smaller_gdf], ignore_index=True)
-
-    return updated_objects_gdf
-
-
+#TODO: здесь нам не нужен полигон в аргументах, если мы можем получить жилые здания по территории прокета\сценария из апишки базы
 async def extract_and_analyze_buildings_within_polygon(polygon, project_id) -> Optional[gpd.GeoDataFrame]:
     if polygon is None:
         return None
 
-    # Загружаем здания из полигона
+    ##TODO: тогда это не нужно
     buildings = ox.features_from_polygon(polygon.geometry.unary_union, tags={"building": True})
     print("Здания загружены.")
 
+    ##TODO: если у нас в базе здания только полигонами, то это тоже не нужно
     # Фильтруем только полигоны и многоугольники
     buildings = buildings[buildings["geometry"].geom_type.isin(["Polygon", "MultiPolygon"])].copy()
     print("Здания отфильтрованы.")
 
+    ##TODO:не нужно
     # Проверка валидности геометрий
     buildings["geometry"] = buildings["geometry"].buffer(0)
     print("Геометрии зданий исправлены.")
 
+    ##TODO: если нам приходят только жилые здания, то не нужно фильтровать по is_living, но жилую площадь нужно достать в атрибутах зданий
     # Определяем жилые здания и вычисляем их площадь
     buildings["is_living"] = buildings.apply(is_living_building, axis=1)
+    ##TODO:если мы можем достать жилую площадь из зданий, то вообще не нужна эта фкнция
     buildings = calculate_living_area(buildings)
     print("Площадь вычислена.")
 
-    # Загружаем полигоны зон
-    landuse_polygons = analyze_and_process_landuse_data(polygon)
+    ##TODO: Просто получаем полигоны зон через наш метод обращения к апи урбан дб
+    landuse_polygons = await analyze_and_process_landuse_data(project_id)
     # landuse_polygons = await extract_landuse(project_id)
     print("Полигоны зон загружены.")
 
+    ##TODO: не преобразовываем CRS, удалить
+    #-------------------------------
     # Проверка CRS и преобразование
     if buildings.crs is None:
         buildings = buildings.set_crs("EPSG:4326")
@@ -468,8 +506,9 @@ async def extract_and_analyze_buildings_within_polygon(polygon, project_id) -> O
     buildings = buildings.to_crs("EPSG:3857")
     landuse_polygons = landuse_polygons.to_crs("EPSG:3857")
     print("CRS преобразован.")
+    # -------------------------------
 
-    # Объединяем зоны и фильтруем здания
+    ##TODO: Тут он объединяет полигоны landuse и смотрит, какие здания в эти полигоны попадают
     try:
         landuse_union = unary_union(landuse_polygons.geometry)
         buildings_within_landuse = buildings[buildings.geometry.within(landuse_union)]
@@ -477,32 +516,48 @@ async def extract_and_analyze_buildings_within_polygon(polygon, project_id) -> O
         print(f"Ошибка при фильтрации зданий внутри зон: {e}")
         return None
 
-    # Дополнительная обработка полигонов
+    ##TODO:эта функция уже не нужна
+    #--------------------------------------
     landuse_polygons = refine_boundary_with_osm_data(polygon, landuse_polygons)
-    landuse_polygons[["ИЖС", "Малоэтажная", "Среднеэтажная", "Многоэтажная"]] = 0.0
-    local_crs = buildings_within_landuse.estimate_utm_crs()
+    # --------------------------------------
 
+    landuse_polygons[["ИЖС", "Малоэтажная", "Среднеэтажная", "Многоэтажная"]] = 0.0
+
+    ##TODO:удалить
+    # --------------------------------------
+    local_crs = buildings_within_landuse.estimate_utm_crs()
     buildings_within_landuse.to_crs(local_crs, inplace=True)
     landuse_polygons.to_crs(local_crs, inplace=True)
+    # --------------------------------------
 
+    ##TODO:нужно для логики, но при необходимости можно переписать
+    # --------------------------------------
     for idx, zone in landuse_polygons.iterrows():
+        # тут из зданий, которые находятся внутри полигонов лэндюза
         buildings_in_zone = buildings_within_landuse[buildings_within_landuse.geometry.within(zone.geometry)]
-
+        # 1. забирает типы застройки из атрибутов зданий внутри зон
         percentages = calculate_building_percentages(buildings_in_zone)
-
+        # 2. вычисляет процентное распределение типов зданий по этажности в процентах
         landuse_polygons.loc[idx, ["ИЖС", "Малоэтажная", "Среднеэтажная", "Многоэтажная"]] = percentages
-
+        # 3. Вычисляет доли площадей зданий (всех и только жилых)
         area_percentage, living_area_percentage = calculate_area_percentage(buildings_in_zone, zone)
         landuse_polygons.at[idx, "Любые дома /на зону"] = area_percentage
         landuse_polygons.at[idx, "Только жилые дома /на зону"] = living_area_percentage
+    # --------------------------------------
 
-    # Применяем функции для определения типа застройки и процентов
+    ##TODO:нужно для логики, подогнать под нашу логику с апи
+    # --------------------------------------
+    # Применяем функции для определения типа застройки и процентов уранизации
     landuse_polygons = assign_development_type(landuse_polygons)
     print("Тип застройки присвоен.")
     landuse_polygons = classify_urbanization_levels(landuse_polygons)
     print("Классификация выполнена.")
+    # --------------------------------------
 
-    # Формируем результат
+    ##TODO:тут он формирует гдфы, но почему-то возвращает только один. Если buildings_within_landuse не нужен, то удалить эту переменную
+
+    #внимательно, это теги из ОСМ, может просто нужно убрать если негде не нужно
+    # --------------------------------------
     result = landuse_polygons[
         [
             "landuse",
@@ -511,6 +566,7 @@ async def extract_and_analyze_buildings_within_polygon(polygon, project_id) -> O
             "tourism",
             "aeroway",
             "amenity",
+    # --------------------------------------
             "ИЖС",
             "Малоэтажная",
             "Среднеэтажная",
@@ -527,7 +583,7 @@ async def extract_and_analyze_buildings_within_polygon(polygon, project_id) -> O
 
     return result
 
-
+##TODO:Подогнать под изменения логики выше, оставить нужные расчёты
 async def analyze_geojson_for_renovation_potential(file_path, excluded_zone, project_id):
     geo_data = await extract_and_analyze_buildings_within_polygon(file_path, project_id)
 
