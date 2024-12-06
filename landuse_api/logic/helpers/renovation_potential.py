@@ -16,7 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncConnection
 
 from landuse_api.db.entities import projects_data, scenarios_data, territories_data
 from landuse_api.exceptions import AccessDeniedError, EntityNotFoundById
-from landuse_api.logic.api.urban_db_api_gateway import urban_db_api
+from landuse_api.logic.api import urban_db_api
 from landuse_api.schemas import Feature, GeoJSON, Profile
 
 
@@ -575,84 +575,11 @@ async def analyze_geojson_for_renovation_potential(file_path, excluded_zone, pro
     return geo_data
 
 
-async def get_projects_renovation_potential(
-    conn: AsyncConnection, project_id: int, profile: Profile, user_id: str
-) -> GeoJSON:
+async def get_projects_renovation_potential(project_id: int, profile: Profile) -> GeoJSON:
     """Calculate renovation potential for project."""
-
-    gms = await urban_db_api.get("/scenarios/123/context/geometries")
-    print(gms)
-
-    # ctx_name = "context"
-    # if ctx_name not in result.properties.keys():
-    #     return GeoJSON.empty()
-    # ctx = result.properties.get(ctx_name)
-    #
-    # statement = select(cast(ST_AsGeoJSON(territories_data.c.geometry), JSONB).label("geometry")).where(
-    #     territories_data.c.territory_id.in_(ctx)
-    # )
-    # geometries = (await conn.execute(statement)).mappings().all()
-    # features = [Feature(geometry=geometry.get("geometry")) for geometry in geometries]
-    # geojsons = [GeoJSON(features=[feature]) for feature in features]
-    #
-    # result = GeoJSON.empty()
-    # for geojson in geojsons:
-    #     filename = f"{hash(time.time())}.geojson"
-    #     try:
-    #         with open(filename, "w") as f:
-    #             print(geojson.as_json(), file=f)
-    #         geojson_file_path = gpd.read_file(filename)
-    #         combined_data = await analyze_geojson_for_renovation_potential(geojson_file_path, profile, project_id=scenario_id)
-    #         result.features.append(combined_data.get("features"))
-    #     finally:
-    #         os.remove(filename)
-    #
-    # return result
+    pass
 
 
-# async def get_projects_renovation_potential(
-#     conn: AsyncConnection, project_id: int, profile: Profile, user_id: str
-# ) -> GeoJSON:
-#     """Calculate renovation potential for project."""
-#
-#     # Получение данных проекта
-#     statement = select(projects_data).where(projects_data.c.project_id == project_id)
-#     result = (await conn.execute(statement)).mappings().one_or_none()
-#
-#     if result is None:
-#         raise EntityNotFoundById(project_id, "project")
-#     if result.user_id != user_id and result.public is False:
-#         raise AccessDeniedError(project_id, "project")
-#
-#
-#     statement = select(scenarios_data.c.scenario_id).where(
-#         (scenarios_data.c.project_id == project_id) & (scenarios_data.c.is_based == True)
-#     )
-#     scenario_id = (await conn.execute(statement)).scalar_one_or_none()
-#
-#     if scenario_id is None:
-#         raise EntityNotFoundById(project_id, "scenario with is_based=True")
-#
-#
-#     ctx_name = "context"
-#     if ctx_name not in result.properties.keys():
-#         return GeoJSON.empty()
-#     ctx = result.properties.get(ctx_name)
-#
-#     statement = select(cast(ST_AsGeoJSON(territories_data.c.geometry), JSONB).label("geometry")).where(
-#         territories_data.c.territory_id.in_(ctx)
-#     )
-#     geometries = (await conn.execute(statement)).mappings().all()
-#     features = [Feature(geometry=geometry.get("geometry")) for geometry in geometries]
-#
-#     geojson = GeoJSON(features=features)
-#     combined_data = await analyze_geojson_for_renovation_potential(geojson, profile, project_id=scenario_id)
-#
-#     result = GeoJSON(features=combined_data.get("features"))
-#
-#     return result
-
-# geojson_file_path = "in.txt"
-# geojson_file_path = gpd.read_file(geojson_file_path)
-# combined_data = analyze_geojson_for_renovation_potential(geojson_file_path, "Residential")
-# combined_data.to_file("Test 2.geojson")
+async def get_projects_urbanization_level(project_id: int) -> GeoJSON:
+    """Calculate urbanization level for project."""
+    pass

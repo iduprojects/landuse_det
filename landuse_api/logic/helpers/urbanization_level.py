@@ -1,18 +1,7 @@
-import os
-import time
-
 import geopandas as gpd
 import pandas as pd
-from geoalchemy2.functions import ST_AsGeoJSON
 from shapely.geometry import LineString, MultiLineString, MultiPolygon, Polygon
 from shapely.ops import polygonize
-from sqlalchemy import cast, select
-from sqlalchemy.dialects.postgresql import JSONB
-from sqlalchemy.ext.asyncio import AsyncConnection
-
-from landuse_api.db.entities import projects_data, territories_data
-from landuse_api.exceptions import AccessDeniedError, EntityNotFoundById
-from landuse_api.schemas import Feature, GeoJSON
 
 
 def _polygons_to_linestring(geom):
@@ -121,47 +110,3 @@ def calculate_intersection_percentage(gdf_landuse, gdf_zones):
     dissolved_geometries.to_crs(4326)
     gdf_zones.to_crs(4326)
     return dissolved_geometries, gdf_zones
-
-
-async def get_projects_urbanization_level(conn: AsyncConnection, project_id: int, user_id: str) -> GeoJSON:
-    """Calculate urbanization level for project."""
-
-    statement = select(projects_data).where(projects_data.c.project_id == project_id)
-    result = (await conn.execute(statement)).mappings().one_or_none()
-
-    if result is None:
-        raise EntityNotFoundById(project_id, "project")
-    if result.user_id != user_id and result.public is False:
-        raise AccessDeniedError(project_id, "project")
-
-    ctx_name = "context"
-    ctx = [] if ctx_name not in result.properties.keys() else result.properties.get(ctx_name)
-
-    statement = select(cast(ST_AsGeoJSON(territories_data.c.geometry), JSONB).label("geometry")).where(
-        territories_data.c.territory_id.in_(ctx)
-    )
-    result = (await conn.execute(statement)).mappings().one()
-    geojson = GeoJSON(features=[Feature(geometry=result.get("geometry"), properties={})])
-    filename = f"{hash(time.time())}.geojson"
-
-    try:
-        with open(filename, "w") as f:
-            print(geojson.as_json(), file=f)
-        geojson_file_path = gpd.read_file(filename)
-        # combined_data, discomfort_coefficient = analyze_geojson_for_renovation_potential(
-        #     geojson_file_path, "Residential"
-        # )
-        # geojson.features[0].properties = {"discomfort_coefficient": discomfort_coefficient}
-    finally:
-        os.remove(filename)
-
-    return geojson
-
-    # return {"urbanization_level": "ok"}
-
-
-# geojson_file_path11 = "ПЗЗ Шлиссельбурга.geojson"
-# geojson_file_path12 = "Test 2.geojson"
-# geojson_file_path11 = gpd.read_file(geojson_file_path11)
-# geojson_file_path12 = gpd.read_file(geojson_file_path12)
-# combined_data, com = calculate_intersection_percentage(geojson_file_path11, geojson_file_path12)

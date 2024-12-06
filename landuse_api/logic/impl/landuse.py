@@ -16,11 +16,11 @@ class LanduseServiceImpl(LanduseService):
 
     async def get_renovation_potential(self, project_id: int, profile: Profile, user_id: str) -> GeoJSON:
         """Calculate renovation potential for project."""
-        return await get_projects_renovation_potential(self._conn, project_id, profile, user_id)
+        return await get_projects_renovation_potential(project_id, profile)
 
     async def get_urbanization_level(self, project_id: int, user_id: str) -> GeoJSON:
         """Calculate urbanization level for project."""
-        return await get_projects_urbanization_level(self._conn, project_id, user_id)
+        return await get_projects_urbanization_level(project_id)
 
     async def check_api(self, project_id: int, user_id: str) -> GeoJSON:
         """API CHECK"""
