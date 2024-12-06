@@ -3,7 +3,7 @@
 from fastapi import Path
 from starlette import status
 
-from ..logic.impl import landuse_service_impl
+from ..logic import landuse_service
 
 from ..schemas import GeoJSON, Profile
 from .routers import landuse_router
@@ -19,8 +19,7 @@ async def get_projects_renovation_potential(
     project_id: int = Path(..., description="project identifier"),
 ) -> GeoJSON:
     """Calculate renovation potential for project."""
-
-    return await landuse_service_impl.get_renovation_potential(project_id, profile)
+    return await landuse_service.get_renovation_potential(project_id, profile)
 
 
 @landuse_router.get(
@@ -33,5 +32,4 @@ async def get_projects_urbanization_level(
     project_id: int = Path(..., description="project identifier"),
 ) -> GeoJSON:
     """Calculate urbanization level for project."""
-
-    return await landuse_service_impl.get_urbanization_level(project_id, profile)
+    return await landuse_service.get_urbanization_level(project_id, profile)
