@@ -1,20 +1,48 @@
-"""Head API exception class is defined here."""
+"""
+Exceptions module goal is to create custom exceptions in order to raise propper errors,
+which will make understandable problems for users.
+"""
 
-from fastapi import HTTPException, status
 
-
-class ApiError(HTTPException):
-    """
-    Base API exception to inherit from.
-    User can redefine `status_code` method and `__str__` as its value will be used in HTTPException.
-    """
-
-    def __init__(self):
-        super().__init__(self.get_status_code(), str(self))
-
-    def get_status_code(self) -> int:
+class BaseError(KeyError):
+    def __init__(self, *args):
         """
-        Return FastApi response status for an HTTPException. Descestors should override this method,
-            but it defaults to 500 - Internal Server Error.
+        Initializes the object with an optional message.
+
+        Args:
+            *args: An optional message to be stored in the object. If provided, it should be a single argument.
+
+        Returns:
+            None
         """
-        return status.HTTP_500_INTERNAL_SERVER_ERROR
+        if args:
+            self.message = args[0]
+        else:
+            self.message = None
+
+
+class TimeOutError(BaseError):
+    def __str__(self):
+        """
+        A method that returns a custom string representation for the TimeOutError class.
+        """
+        if self.message:
+            return "TimeOutError, {0} ".format(self.message)
+        else:
+            return (
+                "Timeout time exceeded:("
+            )
+
+
+class NoDataError(BaseError):
+    def __str__(self):
+        """
+        Returns a string representation of the NoDataError object. If the object has a message attribute, it returns a formatted string with the message. Otherwise, it returns the string "No Data in DB".
+
+        Returns:
+            str: The string representation of the NoDataError object.
+        """
+        if self.message:
+            return f"No existing data in DB for: {self.message}"
+        else:
+            return "No Data in DB"

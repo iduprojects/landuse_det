@@ -4,7 +4,7 @@ from fastapi.openapi.docs import get_swagger_ui_html
 
 from landuse_api.handlers import list_of_routes
 from landuse_api.info import API_DESCRIPTION, API_TITLE, LAST_UPDATE, VERSION
-from landuse_api.middlewares import ExceptionHandlerMiddleware
+# from landuse_api.middlewares import ExceptionHandlerMiddleware
 
 
 def bind_routes(application: FastAPI, prefix: str) -> None:
@@ -48,10 +48,10 @@ def get_app(prefix: str = "/api") -> FastAPI:
         allow_headers=["*"],
     )
 
-    application.add_middleware(
-        ExceptionHandlerMiddleware,
-        debug=[False],  # reinitialized on startup
-    )
+    # application.add_middleware(
+    #     ExceptionHandlerMiddleware,
+    #     debug=[False],  # reinitialized on startup
+    # )
 
     return application
 

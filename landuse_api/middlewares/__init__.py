@@ -1,7 +1,7 @@
-"""Middlewares module."""
-
-from .exception_handler import ExceptionHandlerMiddleware
-
-__all__ = [
-    "ExceptionHandlerMiddleware",
-]
+# """Middlewares module."""
+#
+# from .exception_handler import ExceptionHandlerMiddleware
+#
+# __all__ = [
+#     "ExceptionHandlerMiddleware",
+# ]

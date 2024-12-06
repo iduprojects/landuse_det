@@ -2,6 +2,7 @@ import aiohttp
 from fastapi.exceptions import FastAPIError
 
 from landuse_api import config
+from landuse_api.exceptions.http_exception_wrapper import http_exception
 
 
 class UrbanDbAPI:
@@ -15,7 +16,7 @@ class UrbanDbAPI:
             async with session.get(url=endpoint_url, params=params) as response:
                 if response.status == 200:
                     return await response.json()
-                raise FastAPIError(response.status, response.json())
+                raise http_exception(404, f"Failed to fetch data from Urban API", response.status)
 
 
 urban_db_api = UrbanDbAPI(config.DIG_TP_API)
