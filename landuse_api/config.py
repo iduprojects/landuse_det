@@ -17,28 +17,8 @@ class AppConfig:
 
 
 @dataclass
-class DBConfig:
-    addr: str = "localhost"
-    port: int = 5432
-    name: str = "urban_db"
-    user: str = "postgres"
-    password: str = "postgres"
-    pool_size: int = 15
-
-
-@dataclass
-class AuthConfig:
-    url: str = ""
-    validate: int = 0
-    cache_size: int = 100
-    cache_ttl: int = 1800
-
-
-@dataclass
 class APIConfig:
     app: AppConfig
-    db: DBConfig
-    auth: AuthConfig
     URBAN_DB_API: str = ""
     DIG_TP_API: str = ""
 
@@ -55,8 +35,6 @@ class APIConfig:
 
             return cls(
                 app=AppConfig(**data.get("app", {})),
-                db=DBConfig(**data.get("db", {})),
-                auth=AuthConfig(**data.get("auth", {})),
                 URBAN_DB_API=data.get("URBAN_DB_API", ""),
                 DIG_TP_API=data.get("DIG_TP_API", ""),
             )

@@ -1,15 +1,10 @@
-from contextlib import asynccontextmanager
-
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.docs import get_swagger_ui_html
 
-from landuse_api.config import APIConfig
-from landuse_api.db import PostgresConnectionManager
 from landuse_api.handlers import list_of_routes
-from landuse_api.info import API_DESCRIPTION, API_TITLE, CONFIG_PATH, LAST_UPDATE, VERSION
-from landuse_api.logic.impl import LanduseServiceImpl
-from landuse_api.middlewares import ExceptionHandlerMiddleware, PassServicesDependencies
+from landuse_api.info import API_DESCRIPTION, API_TITLE, LAST_UPDATE, VERSION
+from landuse_api.middlewares import ExceptionHandlerMiddleware
 
 
 def bind_routes(application: FastAPI, prefix: str) -> None:
@@ -30,7 +25,6 @@ def get_app(prefix: str = "/api") -> FastAPI:
         terms_of_service="http://swagger.io/terms/",
         contact={"email": "idu@itmo.ru"},
         license_info={"name": "Apache 2.0", "url": "http://www.apache.org/licenses/LICENSE-2.0.html"},
-        lifespan=lifespan,
     )
     bind_routes(application, prefix)
 
@@ -54,50 +48,12 @@ def get_app(prefix: str = "/api") -> FastAPI:
         allow_headers=["*"],
     )
 
-    connection_manager = PostgresConnectionManager("", 0, "", "", "", 0, "")
-
     application.add_middleware(
         ExceptionHandlerMiddleware,
         debug=[False],  # reinitialized on startup
     )
-    application.add_middleware(
-        PassServicesDependencies,
-        connection_manager=connection_manager,  # reinitialized on startup
-        landuse_service=LanduseServiceImpl,
-    )
 
     return application
-
-
-@asynccontextmanager
-async def lifespan(application: FastAPI):
-    """Lifespan function.
-
-    Initializes database connection in pass_services_dependencies middleware.
-    """
-    app_config = APIConfig.load(CONFIG_PATH)
-    for middleware in application.user_middleware:
-        if middleware.cls == PassServicesDependencies:
-            connection_manager: PostgresConnectionManager = middleware.kwargs["connection_manager"]
-            await connection_manager.update(
-                app_config.db.addr,
-                app_config.db.port,
-                app_config.db.name,
-                app_config.db.user,
-                app_config.db.password,
-                app_config.db.pool_size,
-                app_config.app.name,
-            )
-            await connection_manager.refresh()
-        elif middleware.cls == ExceptionHandlerMiddleware:
-            middleware.kwargs["debug"][0] = app_config.app.debug
-
-    yield
-
-    for middleware in application.user_middleware:
-        if middleware.cls == PassServicesDependencies:
-            connection_manager: PostgresConnectionManager = middleware.kwargs["connection_manager"]
-            await connection_manager.shutdown()
 
 
 app = get_app()
