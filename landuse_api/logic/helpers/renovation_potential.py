@@ -1,23 +1,17 @@
 import math
-import os
-import time
 from typing import Optional
 
 import geopandas as gpd
 import numpy as np
 import osmnx as ox
 import pandas as pd
-from geoalchemy2.functions import ST_AsGeoJSON
 from shapely import unary_union
 from shapely.geometry import box
-from sqlalchemy import cast, select
-from sqlalchemy.dialects.postgresql import JSONB
-from sqlalchemy.ext.asyncio import AsyncConnection
 
-from landuse_api.db.entities import projects_data, scenarios_data, territories_data
-from landuse_api.exceptions import AccessDeniedError, EntityNotFoundById
 from landuse_api.logic.api import urban_db_api
-from landuse_api.schemas import Feature, GeoJSON, Profile
+from landuse_api.schemas import GeoJSON, Profile
+
+from .urban_api_access import get_projects_base_scenario_context_geometries, get_projects_territory
 
 
 def extract_landuse_within_polygon(input_polygon):
@@ -99,13 +93,13 @@ def extract_landuse_within_polygon(input_polygon):
     return gpd.GeoDataFrame(columns=["geometry"])
 
 
-async def extract_landuse(project_id: int) -> gpd.GeoDataFrame:
-    geojson_data = await urban_db_api.fetch_territories(project_id)
-    gdf = gpd.GeoDataFrame.from_features(geojson_data, crs="EPSG:4326")
-    # geojson_result = gdf.to_json()
-    # return geojson_result
-
-    return gdf
+# async def extract_landuse(project_id: int) -> gpd.GeoDataFrame:
+#     geojson_data = await urban_db_api.fetch_territories(project_id)
+#     gdf = gpd.GeoDataFrame.from_features(geojson_data, crs="EPSG:4326")
+#     # geojson_result = gdf.to_json()
+#     # return geojson_result
+#
+#     return gdf
 
 
 def assign_landuse_zone(row):
@@ -462,7 +456,7 @@ async def extract_and_analyze_buildings_within_polygon(polygon, project_id) -> O
 
     # Загружаем полигоны зон
     landuse_polygons = analyze_and_process_landuse_data(polygon)
-    landuse_polygons = await extract_landuse(project_id)
+    # landuse_polygons = await extract_landuse(project_id)
     print("Полигоны зон загружены.")
 
     # Проверка CRS и преобразование
@@ -577,9 +571,16 @@ async def analyze_geojson_for_renovation_potential(file_path, excluded_zone, pro
 
 async def get_projects_renovation_potential(project_id: int, profile: Profile) -> GeoJSON:
     """Calculate renovation potential for project."""
-    pass
+
+    geojson = await get_projects_territory(project_id)
+    gdf = gpd.GeoDataFrame.from_features(GeoJSON.from_geometry(geojson.get("geometry")), crs="EPSG:4326")
+    result = await analyze_geojson_for_renovation_potential(gdf, profile, project_id)
+    return GeoJSON.from_geodataframe(result)
 
 
 async def get_projects_urbanization_level(project_id: int) -> GeoJSON:
     """Calculate urbanization level for project."""
-    pass
+    geojson = await get_projects_base_scenario_context_geometries(project_id)
+    gdf = gpd.GeoDataFrame.from_features(geojson, crs="EPSG:4326")
+    result = await analyze_geojson_for_renovation_potential(gdf, profile, project_id)
+    return GeoJSON.from_geodataframe(result)

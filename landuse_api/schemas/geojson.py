@@ -11,6 +11,10 @@ class GeoJSON(FeatureCollection):
     type: Literal["FeatureCollection"] = "FeatureCollection"
 
     @classmethod
+    def from_geometry(cls, geometry: dict[str, Any]) -> "GeoJSON":
+        return cls(features=[Feature(type="Feature", geometry=geometry, properties={})])
+
+    @classmethod
     def from_features_list(cls, features: list[dict[str, Any]]) -> "GeoJSON":
         feature_collection = []
         for feature in features:
