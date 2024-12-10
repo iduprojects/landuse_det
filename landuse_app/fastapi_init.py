@@ -2,9 +2,8 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.docs import get_swagger_ui_html
 
-from landuse_api.handlers import list_of_routes
-from landuse_api.info import API_DESCRIPTION, API_TITLE, LAST_UPDATE, VERSION
-# from landuse_api.middlewares import ExceptionHandlerMiddleware
+from landuse_app import config
+from landuse_app.handlers import list_of_routes
 
 
 def bind_routes(application: FastAPI, prefix: str) -> None:
@@ -17,11 +16,11 @@ def get_app(prefix: str = "/api") -> FastAPI:
     """Create application and all dependable objects."""
 
     application = FastAPI(
-        title=API_TITLE,
-        description=API_DESCRIPTION,
+        title="Landuse Det API",
+        description=config.get("API_DESCRIPTION"),
         docs_url=None,
         openapi_url=f"{prefix}/openapi",
-        version=f"{VERSION} ({LAST_UPDATE})",
+        version=f"{config.get("VERSION")} ({config.get("LAST_UPDATE")})",
         terms_of_service="http://swagger.io/terms/",
         contact={"email": "idu@itmo.ru"},
         license_info={"name": "Apache 2.0", "url": "http://www.apache.org/licenses/LICENSE-2.0.html"},
@@ -47,11 +46,6 @@ def get_app(prefix: str = "/api") -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
-
-    # application.add_middleware(
-    #     ExceptionHandlerMiddleware,
-    #     debug=[False],  # reinitialized on startup
-    # )
 
     return application
 

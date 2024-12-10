@@ -1,22 +1,26 @@
-# TODO make Dockerfile
-FROM python:3.12-alpine
+# Используем Python 3.12
+FROM python:3.12.8
 
-RUN apk add --virtual build-deps
-RUN apk add python3-dev musl-dev linux-headers postgresql-dev geos-dev
+# Открываем порт для приложения
+EXPOSE 80
 
-RUN pip3 install --no-cache-dir poetry
+EXPOSE 80
 
-COPY pyproject.toml /app/pyproject.toml
-RUN sed -i '0,/version = .*/ s//version = "0.1.0"/' /app/pyproject.toml && touch /app/README.md
+# Keeps Python from generating .pyc files in the container
+ENV PYTHONDONTWRITEBYTECODE=1
+
+# Turns off buffering for easier container logging
+ENV PYTHONUNBUFFERED=1
+
+# Enables env file
+ENV APP_ENV=development
+
+# Install pip requirements
+COPY requirements.txt .
+RUN python -m pip install -r requirements.txt
 
 WORKDIR /app
-RUN poetry config virtualenvs.create false
-RUN poetry install
+COPY . /app
 
-COPY README.md /app/README.md
-COPY landuse_api/config.yaml /app/config.yaml
-COPY landuse_api /app/landuse_det
-
-RUN pip3 install .
-
-CMD ["launch-app"]
+# During debugging, this entry point will be overridden. For more information, please refer to https://aka.ms/vscode-docker-python-debug
+CMD ["gunicorn", "--bind", "0.0.0.0:80", "-k", "uvicorn.workers.UvicornWorker", "landuse_app.fastapi_init:app"]

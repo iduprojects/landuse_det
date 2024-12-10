@@ -1,6 +1,6 @@
 """Landuse handlers logic."""
 
-from landuse_api.schemas import GeoJSON, Profile
+from landuse_app.schemas import GeoJSON, Profile
 
 from .helpers import (
     get_projects_context_renovation_potential,
