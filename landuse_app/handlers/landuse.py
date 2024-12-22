@@ -9,7 +9,7 @@ from .routers import landuse_router
 
 @landuse_router.get(
     "/projects/{project_id}/renovation_potential",
-    response_model=GeoJSON,
+    response_model=dict,
 )
 async def get_projects_renovation_potential(
     profile: Profile,
@@ -33,7 +33,7 @@ async def get_projects_urbanization_level(
 
 @landuse_router.get(
     "/projects/{project_id}/context/renovation_potential",
-    response_model=GeoJSON,
+    response_model=dict,
 )
 async def get_projects_context_renovation_potential(
     profile: Profile,
@@ -45,7 +45,7 @@ async def get_projects_context_renovation_potential(
 
 @landuse_router.get(
     "/projects/{project_id}/context/urbanization_level",
-    response_model=GeoJSON,
+    response_model=GeoJSON
 )
 async def get_projects_context_urbanization_level(
     profile: Profile,
@@ -53,3 +53,11 @@ async def get_projects_context_urbanization_level(
 ) -> GeoJSON:
     """Calculate urbanization level for project's context."""
     return await landuse_service.get_context_urbanization_level(project_id, profile)
+
+
+@landuse_router.get(
+    "/projects/{project_id}/landuse_percentages",
+    response_model=dict
+)
+async def get_project_landuse_parts(project_id: int) -> dict:
+    return await landuse_service.get_project_landuse_parts(project_id)

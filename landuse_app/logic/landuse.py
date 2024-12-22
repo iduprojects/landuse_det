@@ -8,12 +8,13 @@ from .helpers import (
     get_projects_renovation_potential,
     get_projects_urbanization_level,
 )
+from .helpers.renovation_potential import get_project_landuse_parts
 
 
 class LanduseService:
     """Landuse service."""
 
-    async def get_renovation_potential(self, project_id: int, profile: Profile) -> GeoJSON:
+    async def get_renovation_potential(self, project_id: int, profile: Profile) -> dict:
         """Calculate renovation potential for project."""
         return await get_projects_renovation_potential(project_id, profile)
 
@@ -21,7 +22,7 @@ class LanduseService:
         """Calculate urbanization level for project."""
         return await get_projects_urbanization_level(project_id, profile)
 
-    async def get_context_renovation_potential(self, project_id: int, profile: Profile) -> GeoJSON:
+    async def get_context_renovation_potential(self, project_id: int, profile: Profile) -> dict:
         """Calculate renovation potential for project's context."""
         return await get_projects_context_renovation_potential(project_id, profile)
 
@@ -29,5 +30,8 @@ class LanduseService:
         """Calculate urbanization level for project's context."""
         return await get_projects_context_urbanization_level(project_id, profile)
 
+    async def get_project_landuse_parts(self, project_id: int) -> dict:
+        """Calculate zone parts inside project's territory"""
+        return await get_project_landuse_parts(project_id)
 
 landuse_service = LanduseService()
