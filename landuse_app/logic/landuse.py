@@ -8,7 +8,7 @@ from .helpers import (
     get_projects_renovation_potential,
     get_projects_urbanization_level,
 )
-from .helpers.renovation_potential import get_project_landuse_parts
+from .helpers.renovation_potential import get_projects_landuse_parts_scen_id
 
 
 class LanduseService:
@@ -30,8 +30,8 @@ class LanduseService:
         """Calculate urbanization level for project's context."""
         return await get_projects_context_urbanization_level(project_id, profile)
 
-    async def get_project_landuse_parts(self, project_id: int) -> dict:
+    async def get_project_landuse_parts(self, scenario_id: int) -> dict:
         """Calculate zone parts inside project's territory"""
-        return await get_project_landuse_parts(project_id)
+        return await get_projects_landuse_parts_scen_id(scenario_id)
 
 landuse_service = LanduseService()

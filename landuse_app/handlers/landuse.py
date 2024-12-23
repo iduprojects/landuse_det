@@ -56,8 +56,8 @@ async def get_projects_context_urbanization_level(
 
 
 @landuse_router.get(
-    "/projects/{project_id}/landuse_percentages",
+    "/projects/{scenario_id}/landuse_percentages",
     response_model=dict
 )
-async def get_project_landuse_parts(project_id: int) -> dict:
-    return await landuse_service.get_project_landuse_parts(project_id)
+async def get_project_landuse_parts(scenario_id: int) -> dict:
+    return await landuse_service.get_project_landuse_parts(scenario_id)
