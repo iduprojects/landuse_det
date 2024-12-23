@@ -11,13 +11,13 @@ from pandarallel import pandarallel
 from landuse_app.schemas import GeoJSON, Profile
 from storage.caching import caching_service
 from .urban_api_access import get_all_physical_objects_geometries, get_functional_zones_scenario_id, \
-    get_all_physical_objects_geometries_scen_id
+    get_all_physical_objects_geometries_scen_id_percentages, get_functional_zones_scen_id_percentages
 from ..constants.constants import zone_mapping
 
 pandarallel.initialize(progress_bar=False, nb_workers=4)
 
 
-async def extract_physical_objects(project_id: int, is_context: bool, scenario_id: bool = False) -> dict[str, gpd.GeoDataFrame]:
+async def extract_physical_objects(project_id: int, is_context: bool, scenario_id_flag: bool = False) -> dict[str, gpd.GeoDataFrame]:
     """
     Extracts and processes physical objects for a given project, handling geometries and object attributes.
 
@@ -32,8 +32,8 @@ async def extract_physical_objects(project_id: int, is_context: bool, scenario_i
         A GeoDataFrame containing processed physical objects with valid geometries and relevant attributes.
     """
     logger.info("Физические объекты загружаются")
-    if scenario_id:
-        physical_objects_response = await get_all_physical_objects_geometries_scen_id(project_id) #scenario_id
+    if scenario_id_flag:
+        physical_objects_response = await get_all_physical_objects_geometries_scen_id_percentages(project_id)
     else:
         physical_objects_response = await get_all_physical_objects_geometries(project_id, is_context)
     physical_objects_data = physical_objects_response
@@ -127,7 +127,7 @@ async def extract_physical_objects(project_id: int, is_context: bool, scenario_i
     }
 
 
-async def extract_landuse(is_context: bool, project_id: int, scenario_id: bool = False) -> gpd.GeoDataFrame:
+async def extract_landuse(is_context: bool, project_id: int, scenario_id_flag: bool = False) -> gpd.GeoDataFrame:
     """
     Extracts functional zones polygons for a given project and returns them as a GeoDataFrame.
 
@@ -147,8 +147,8 @@ async def extract_landuse(is_context: bool, project_id: int, scenario_id: bool =
     ValueError
         If the input data is malformed or invalid.
     """
-    if scenario_id:
-        geojson_data = await get_projects_landuse_parts_scen_id(scenario_id)
+    if scenario_id_flag:
+        geojson_data = await get_functional_zones_scen_id_percentages(project_id)
     else:
         geojson_data = await get_functional_zones_scenario_id(project_id, is_context)
     logger.info("Функциональные зоны загружаются")
@@ -623,43 +623,36 @@ async def filter_response(polygons_gdf: gpd.GeoDataFrame, filter_type: bool = Fa
     return polygons_gdf
 
 
-async def calculate_zone_percentages(project_id: int, is_context: bool = False, scenario_id: bool = False) -> dict:
+async def calculate_zone_percentages(scenario_id: int, is_context: bool = False) -> dict:
     """
     Calculates the percentage of the total area occupied by each unique landuse zone,
     including water objects, forests, and green objects, and ensures all predefined categories are present in the output.
 
     Args:
-        project_id (int): ID of the project to process.
+        scenario_id (int): ID of the project to process.
         is_context (bool): Whether to include contextual data.
 
     Returns:
         dict: A dictionary with the percentages for each unique landuse zone.
     """
     if scenario_id:
-        geojson_data = await get_projects_landuse_parts_scen_id(project_id)
+        physical_objects_dict, landuse_polygons = await asyncio.gather(
+            extract_physical_objects(scenario_id, is_context, True),
+            extract_landuse(is_context, scenario_id, True)
+        )
     else:
-        geojson_data = await get_functional_zones_scenario_id(project_id, is_context)
-
-    physical_objects_dict, landuse_polygons = await asyncio.gather(
-        extract_physical_objects(project_id, is_context),
-        extract_landuse(is_context, project_id)
-    )
+        physical_objects_dict, landuse_polygons = await asyncio.gather(
+            extract_physical_objects(scenario_id, is_context),
+            extract_landuse(is_context, scenario_id)
+        )
     water_objects = physical_objects_dict["water_objects"]
     green_objects = physical_objects_dict["green_objects"]  # новое
     forests = physical_objects_dict["forests"]  # новое
     landuse_polygons = landuse_polygons.to_crs(epsg=3857)
 
-    if "landuse_zone" not in landuse_polygons.columns:
-        raise ValueError("The GeoDataFrame must include a 'landuse_zone' column.")
-    if "geometry" not in landuse_polygons.columns:
-        raise ValueError("The GeoDataFrame must include a 'geometry' column.")
-
     landuse_polygons["landuse_zone"] = landuse_polygons["landuse_zone"].fillna("Residential")
     landuse_polygons["area"] = landuse_polygons.geometry.area
     total_area_landuse = landuse_polygons["area"].sum()
-
-    if total_area_landuse + water_objects + green_objects + forests == 0:
-        raise ValueError("The total area of all polygons is zero, cannot calculate percentages.")
 
     zone_area = landuse_polygons.groupby("landuse_zone")["area"].sum()
     zone_percentages = (zone_area / (total_area_landuse + water_objects + green_objects + forests) * 100).to_dict()
@@ -695,11 +688,14 @@ async def calculate_zone_percentages(project_id: int, is_context: bool = False, 
     return human_readable_percentages
 
 
-
 async def get_projects_renovation_potential(project_id: int, profile: Profile) -> dict:
     """Calculate renovation potential for project and include discomfort as a separate key."""
     landuse_polygons = await get_renovation_potential(project_id, profile, is_context=False)
-    discomfort_value = landuse_polygons["Неудобия"].iloc[0] if "Неудобия" in landuse_polygons.columns else None
+    discomfort_value = (
+        round(landuse_polygons["Неудобия"].iloc[0], 2)
+        if "Неудобия" in landuse_polygons.columns and not landuse_polygons["Неудобия"].isna().iloc[0]
+        else None
+    )
     landuse_polygons = await filter_response(landuse_polygons, True)
     geojson = GeoJSON.from_geodataframe(landuse_polygons)
 
@@ -721,7 +717,11 @@ async def get_projects_urbanization_level(project_id: int, profile: Profile) -> 
 async def get_projects_context_renovation_potential(project_id: int, profile: Profile) -> dict:
     """Calculate renovation potential for project's context."""
     landuse_polygons = await get_renovation_potential(project_id, profile, is_context=True)
-    discomfort_value = landuse_polygons["Неудобия"].iloc[0] if "Неудобия" in landuse_polygons.columns else None
+    discomfort_value = (
+        round(landuse_polygons["Неудобия"].iloc[0], 2)
+        if "Неудобия" in landuse_polygons.columns and not landuse_polygons["Неудобия"].isna().iloc[0]
+        else None
+    )
     landuse_polygons = await filter_response(landuse_polygons, True)
     geojson = GeoJSON.from_geodataframe(landuse_polygons)
 
@@ -740,6 +740,6 @@ async def get_projects_context_urbanization_level(project_id: int, profile: Prof
     return GeoJSON.from_geodataframe(landuse_polygons)
 
 
-async def get_projects_landuse_parts_scen_id(scenario_id: int, ) -> dict:
+async def get_projects_landuse_parts_scen_id_main_method(scenario_id: int) -> dict:
     landuse_parts = await calculate_zone_percentages(scenario_id)
     return landuse_parts
