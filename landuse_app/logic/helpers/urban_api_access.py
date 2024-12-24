@@ -99,8 +99,35 @@ async def get_all_physical_objects_geometries(project_id: int, is_context: bool 
 
     return response
 
+
 async def get_all_physical_objects_geometries_type_id(project_id: int, object_type_id: int) -> dict:
     base_scenario_id = await get_projects_base_scenario_id(project_id)
     return await urban_db_api.get(
         f"/scenarios/{base_scenario_id}/geometries_with_all_objects?physical_object_type_id={object_type_id}"
     )
+
+
+async def get_functional_zones_scen_id_percentages(scenario_id: int):
+    endpoint = f"/scenarios/{scenario_id}/functional_zones?year=2024&source=OSM"
+    response = await urban_db_api.get(endpoint)
+    if not response or "features" not in response or not response["features"]:
+        raise http_exception(404, "No functional zones found for the given project ID:", scenario_id)
+    return response
+
+
+async def get_all_physical_objects_geometries_scen_id_percentages(scenario_id: int) -> dict:
+    """
+    Fetches all physical object geometries for a project, optionally for context.
+
+    Parameters:
+        scenario_id (int): ID of the scenario.
+    Returns:
+        dict: The API response containing geometries.
+
+    Raises:
+        HTTPException: If the response is empty.
+    """
+    endpoint = f"/scenarios/{scenario_id}/geometries_with_all_objects"
+    response = await urban_db_api.get(endpoint)
+
+    return response
