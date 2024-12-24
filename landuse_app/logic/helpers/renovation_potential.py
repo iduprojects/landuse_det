@@ -620,6 +620,7 @@ async def filter_response(polygons_gdf: gpd.GeoDataFrame, filter_type: bool = Fa
 
     polygons_gdf = polygons_gdf.rename(columns=columns_mapping)
     polygons_gdf = polygons_gdf[required_columns]
+    polygons_gdf["Потенциал реновации"] = polygons_gdf["Потенциал реновации"].fillna("Не подлежащие реновации")
     return polygons_gdf
 
 
