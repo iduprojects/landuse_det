@@ -610,6 +610,9 @@ async def filter_response(polygons_gdf: gpd.GeoDataFrame, filter_type: bool = Fa
             "Потенциал реновации",
             "geometry"
         ]
+        polygons_gdf = polygons_gdf.rename(columns=columns_mapping)
+        polygons_gdf = polygons_gdf[required_columns]
+        polygons_gdf["Потенциал реновации"] = polygons_gdf["Потенциал реновации"].fillna("Не подлежащие реновации")
     else: # урбанизация
         required_columns = [
             "Тип землепользования",
@@ -617,10 +620,9 @@ async def filter_response(polygons_gdf: gpd.GeoDataFrame, filter_type: bool = Fa
             "Площадь",
             "geometry"
         ]
+        polygons_gdf = polygons_gdf.rename(columns=columns_mapping)
+        polygons_gdf = polygons_gdf[required_columns]
 
-    polygons_gdf = polygons_gdf.rename(columns=columns_mapping)
-    polygons_gdf = polygons_gdf[required_columns]
-    polygons_gdf["Потенциал реновации"] = polygons_gdf["Потенциал реновации"].fillna("Не подлежащие реновации")
     return polygons_gdf
 
 
