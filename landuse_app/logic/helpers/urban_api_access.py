@@ -114,7 +114,7 @@ async def get_functional_zones_scenario_id(project_id: int, is_context: bool = F
     year = source_data["year"]
 
     endpoint = (
-        f"/scenarios/{base_scenario_id}/context/functional_zones?year={year}&source={source}"
+        f"/projects/{project_id}/context/functional_zones?year={year}&source={source}"
         if is_context
         else f"/scenarios/{base_scenario_id}/functional_zones?year={year}&source={source}"
     )
@@ -143,7 +143,7 @@ async def get_all_physical_objects_geometries(project_id: int, is_context: bool 
     base_scenario_id = await get_projects_base_scenario_id(project_id)
 
     endpoint = (
-        f"/scenarios/{base_scenario_id}/context/geometries_with_all_objects"
+        f"/projects/{project_id}/context/geometries_with_all_objects"
         if is_context
         else f"/scenarios/{base_scenario_id}/geometries_with_all_objects"
     )
