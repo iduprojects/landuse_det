@@ -1,4 +1,5 @@
 import json
+from typing import Optional
 import geopandas as gpd
 import numpy as np
 import pandas as pd
@@ -10,6 +11,7 @@ from pandarallel import pandarallel
 
 from landuse_app.schemas import GeoJSON, Profile
 from storage.caching import caching_service
+from .spatial_methods import SpatialMethods
 from .urban_api_access import get_all_physical_objects_geometries, get_functional_zones_scenario_id, \
     get_all_physical_objects_geometries_scen_id_percentages, get_functional_zones_scen_id_percentages
 from ..constants.constants import zone_mapping
@@ -103,7 +105,6 @@ async def extract_physical_objects(project_id: int, is_context: bool, scenario_i
             all_data.append(object_data)
 
     logger.info("Физические объекты загружены")
-
     all_data_df = pd.DataFrame(all_data)
     all_data_gdf = gpd.GeoDataFrame(all_data_df, geometry="geometry", crs="EPSG:4326")
     all_data_gdf = all_data_gdf.drop_duplicates(subset='physical_object_id')
@@ -346,7 +347,7 @@ async def assign_development_type(landuse_polygons: gpd.GeoDataFrame) -> gpd.Geo
 
 async def analyze_geojson_for_renovation_potential(
         landuse_polygons: gpd.GeoDataFrame,
-        selected_profile_to_exclude: str
+        selected_profile_to_exclude: str = None,
         ) -> gpd.GeoDataFrame:
     """
     Analyze geodata to determine renovation potential and calculate a global "discomfort" coefficient.
@@ -358,6 +359,7 @@ async def analyze_geojson_for_renovation_potential(
     Returns:
     GeoDataFrame: Processed data with updated calculations and columns.
     """
+    landuse_polygons = landuse_polygons.to_crs(epsg=3857)
     landuse_polygons["Площадь"] = landuse_polygons.geometry.area
     landuse_polygons["Потенциал"] = "Подлежащие реновации"
 
@@ -369,11 +371,14 @@ async def analyze_geojson_for_renovation_potential(
         (landuse_polygons["Многоэтажная"] > 50),
         landuse_polygons["Уровень урбанизации"] == "Хорошо урбанизированная территория",
         landuse_polygons["Уровень урбанизации"] == "Высоко урбанизированная территория",
-        landuse_polygons["landuse_zone"] == selected_profile_to_exclude,
     ]
 
-    if selected_profile_to_exclude in landuse_polygons["landuse_zone"].unique():
-        landuse_polygons.loc[landuse_polygons["landuse_zone"] == selected_profile_to_exclude, "Потенциал"] = None
+    if selected_profile_to_exclude:
+        conditions.append(landuse_polygons["landuse_zone"] == selected_profile_to_exclude)
+        if selected_profile_to_exclude in landuse_polygons["landuse_zone"].unique():
+            landuse_polygons.loc[
+                landuse_polygons["landuse_zone"] == selected_profile_to_exclude, "Потенциал"
+            ] = None
 
     combined_condition = np.logical_or.reduce(conditions)
     landuse_polygons.loc[combined_condition, "Потенциал"] = None
@@ -382,6 +387,8 @@ async def analyze_geojson_for_renovation_potential(
 
     landuse_polygons["Неудобия"] = (renovation_area / total_area * 100) if total_area > 0 else 0
     landuse_polygons = landuse_polygons[landuse_polygons["Площадь"] > 0]
+    landuse_polygons["Площадь"] = landuse_polygons["Площадь"].round(2)
+    landuse_polygons = landuse_polygons.to_crs(epsg=4236)
 
     return landuse_polygons
 
@@ -399,7 +406,6 @@ def calculate_building_percentages_optimized(buildings_gdf: gpd.GeoDataFrame) ->
     if buildings_gdf.empty or "storeys_count" not in buildings_gdf.columns or "object_type" not in buildings_gdf.columns:
         return pd.Series({"ИЖС": 0, "Малоэтажная": 0, "Среднеэтажная": 0, "Многоэтажная": 0})
 
-    # Filter for valid "Жилой дом" and non-null storeys_count
     filtered_storeys = buildings_gdf.loc[
         (buildings_gdf["object_type"] == "Жилой дом") & buildings_gdf["storeys_count"].notna(), "storeys_count"
     ]
@@ -504,7 +510,12 @@ async def process_zones_with_bulk_update(
     return landuse_polygons
 
 
-async def get_renovation_potential(project_id: int, profile: Profile, is_context: bool, scenario_id: bool = False) -> gpd.GeoDataFrame:
+async def get_renovation_potential(
+    project_id: int,
+    is_context: bool,
+    profile: Optional[Profile] = None,
+    scenario_id: bool = False
+) -> gpd.GeoDataFrame:
     """
     Calculate the renovation potential for a given project.
 
@@ -517,33 +528,29 @@ async def get_renovation_potential(project_id: int, profile: Profile, is_context
     -----------
     project_id : int
         The unique identifier of the project for which the renovation potential is calculated.
-    profile : Profile
-        The user profile providing the context and criteria for analysis.
     is_context : bool
         A flag indicating whether the calculation should include surrounding context.
+    profile : Optional[Profile]
+        The user profile providing the context and criteria for analysis.
+        If not provided, a stub "no_profile" will be used for caching and None will be passed for analysis.
+    scenario_id : bool, optional
+        Scenario identifier flag (default is False).
 
     Returns:
     --------
     gpd.GeoDataFrame
         A GeoDataFrame containing the renovation potential analysis results with calculated attributes.
-
-    Workflow:
-    ---------
-    1. Checks for a valid cached result using the project ID and context flag.
-    2. If cache exists, loads and returns the cached data.
-    3. If no cache is found, asynchronously extracts physical objects and land-use polygons.
-    4. Projects geometries to EPSG:3857 and simplifies large geometries for optimization.
-    5. Filters and processes functional zones with associated physical objects.
-    6. Assigns development types to functional zones and calculates urbanization levels.
-    7. Analyzes zones for renovation potential and returns a GeoDataFrame in EPSG:4326.
     """
+
+    profile_key = str(profile) if profile is not None else "no_profile"
     cache_name = f"renovation_potential_project-{project_id}_is_context-{is_context}"
-    cache_file = caching_service.get_recent_cache_file(cache_name, {"profile": profile})
+    cache_file = caching_service.get_recent_cache_file(cache_name, {"profile": profile_key})
 
     if cache_file and caching_service.is_cache_valid(cache_file):
         logger.info(f"Using cached renovation potential for project {project_id}")
         cached_data = caching_service.load_cache(cache_file)
         return gpd.GeoDataFrame.from_features(cached_data, crs="EPSG:4326")
+
     physical_objects_dict, landuse_polygons = await asyncio.gather(
         extract_physical_objects(project_id, is_context),
         extract_landuse(is_context, project_id)
@@ -551,6 +558,7 @@ async def get_renovation_potential(project_id: int, profile: Profile, is_context
     physical_objects = physical_objects_dict["physical_objects"]
     physical_objects = physical_objects.to_crs(epsg=3857)
     landuse_polygons = landuse_polygons.to_crs(epsg=3857)
+
     landuse_polygons["geometry"] = landuse_polygons.apply(
         lambda row: row.geometry.simplify(0.01, preserve_topology=True)
         if row.geometry.area > 1e8
@@ -571,13 +579,19 @@ async def get_renovation_potential(project_id: int, profile: Profile, is_context
 
     landuse_polygons = await assign_development_type(landuse_polygons)
     logger.info("Уровень урбанизации присвоен")
-    landuse_polygons_ren_pot = await analyze_geojson_for_renovation_potential(landuse_polygons, profile)
+
+    profile_for_analysis = str(profile) if profile is not None else None
+
+    landuse_polygons_ren_pot = await analyze_geojson_for_renovation_potential(landuse_polygons, profile_for_analysis)
     logger.info("Потенциал для реновации рассчитан")
     landuse_polygons_ren_pot = landuse_polygons_ren_pot.to_crs(epsg=4326)
 
     result_json = json.loads(landuse_polygons_ren_pot.to_json())
-    caching_service.save_with_cleanup(result_json, f"renovation_potential_project-{project_id}_is_context-{is_context}",
-                                      {"profile": profile})
+    caching_service.save_with_cleanup(
+        result_json,
+        f"renovation_potential_project-{project_id}_is_context-{is_context}",
+        {"profile": profile_key}
+    )
 
     return landuse_polygons_ren_pot
 
@@ -622,6 +636,7 @@ async def filter_response(polygons_gdf: gpd.GeoDataFrame, filter_type: bool = Fa
         ]
         polygons_gdf = polygons_gdf.rename(columns=columns_mapping)
         polygons_gdf = polygons_gdf[required_columns]
+        polygons_gdf.geometry = await SpatialMethods.round_coords_geom(polygons_gdf.geometry, 6)
 
     return polygons_gdf
 
@@ -672,6 +687,7 @@ async def calculate_zone_percentages(scenario_id: int, is_context: bool = False)
     for zone in predefined_zones:
         if zone not in zone_percentages:
             zone_percentages[zone] = 0.0
+    zone_percentages = {key: round(value, 2) for key, value in zone_percentages.items()}
 
     zone_mapping = {
         "Industrial": "Земли промышленного назначения",
@@ -693,7 +709,7 @@ async def calculate_zone_percentages(scenario_id: int, is_context: bool = False)
 
 async def get_projects_renovation_potential(project_id: int, profile: Profile) -> dict:
     """Calculate renovation potential for project and include discomfort as a separate key."""
-    landuse_polygons = await get_renovation_potential(project_id, profile, is_context=False)
+    landuse_polygons = await get_renovation_potential(project_id, is_context=False, profile=profile)
     discomfort_value = (
         round(landuse_polygons["Неудобия"].iloc[0], 2)
         if "Неудобия" in landuse_polygons.columns and not landuse_polygons["Неудобия"].isna().iloc[0]
@@ -712,14 +728,15 @@ async def get_projects_renovation_potential(project_id: int, profile: Profile) -
 
 async def get_projects_urbanization_level(project_id: int, profile: Profile) -> GeoJSON:
     """Calculate urbanization level for project."""
-    landuse_polygons = await get_renovation_potential(project_id, profile, is_context=False)
+    landuse_polygons = await get_renovation_potential(project_id, is_context=False, profile=profile)
     landuse_polygons = await filter_response(landuse_polygons)
     return GeoJSON.from_geodataframe(landuse_polygons)
 
 
 async def get_projects_context_renovation_potential(project_id: int, profile: Profile) -> dict:
     """Calculate renovation potential for project's context."""
-    landuse_polygons = await get_renovation_potential(project_id, profile, is_context=True)
+    landuse_polygons = await get_renovation_potential(project_id, is_context=True, profile=profile)
+
     discomfort_value = (
         round(landuse_polygons["Неудобия"].iloc[0], 2)
         if "Неудобия" in landuse_polygons.columns and not landuse_polygons["Неудобия"].isna().iloc[0]
@@ -738,7 +755,7 @@ async def get_projects_context_renovation_potential(project_id: int, profile: Pr
 
 async def get_projects_context_urbanization_level(project_id: int, profile: Profile) -> GeoJSON:
     """Calculate urbanization level for project's context."""
-    landuse_polygons = await get_renovation_potential(project_id, profile, is_context=True)
+    landuse_polygons = await get_renovation_potential(project_id, is_context=True, profile=profile)
     landuse_polygons = await filter_response(landuse_polygons)
     return GeoJSON.from_geodataframe(landuse_polygons)
 
@@ -746,3 +763,20 @@ async def get_projects_context_urbanization_level(project_id: int, profile: Prof
 async def get_projects_landuse_parts_scen_id_main_method(scenario_id: int) -> dict:
     landuse_parts = await calculate_zone_percentages(scenario_id)
     return landuse_parts
+
+async def get_renovation_territories_method(project_id: int) -> dict:
+    landuse_polygons = await get_renovation_potential(project_id, is_context=False)
+    discomfort_value = (
+        round(landuse_polygons["Неудобия"].iloc[0], 2)
+        if "Неудобия" in landuse_polygons.columns and not landuse_polygons["Неудобия"].isna().iloc[0]
+        else None
+    )
+    landuse_polygons = await filter_response(landuse_polygons, True)
+    geojson = GeoJSON.from_geodataframe(landuse_polygons)
+
+    response = {
+        "geojson": geojson,
+        "discomfort": discomfort_value
+    }
+
+    return response
