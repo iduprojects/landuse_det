@@ -61,3 +61,8 @@ async def get_projects_context_urbanization_level(
 )
 async def get_project_landuse_parts(scenario_id: int) -> dict:
     return await landuse_service.get_project_landuse_parts(scenario_id)
+
+@landuse_router.get("/projects/{project_id}/renovation_territories")
+async def get_renovation_territories(project_id: int = Path(..., description="project identifier"),
+) -> dict:
+    return await landuse_service.get_renovation_territories(project_id)

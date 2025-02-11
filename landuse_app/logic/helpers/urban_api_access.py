@@ -208,4 +208,7 @@ async def get_all_physical_objects_geometries_scen_id_percentages(scenario_id: i
     endpoint = f"/scenarios/{scenario_id}/geometries_with_all_objects"
     response = await urban_db_api.get(endpoint)
 
+    if not response or "features" not in response or not response["features"]:
+        raise http_exception(404, "No functional zones found for the given scenario ID:", scenario_id)
+
     return response
