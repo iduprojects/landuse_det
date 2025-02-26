@@ -683,7 +683,7 @@ async def calculate_zone_percentages(scenario_id: int, is_context: bool = False)
     zone_percentages["Green Objects"] = green_objects_percentage
     zone_percentages["Forests"] = forests_percentage
 
-    predefined_zones = ["Industrial", "Residential", "Special", "Recreation", "Agriculture"]
+    predefined_zones = ["Industrial", "Residential", "Special", "Recreation", "Agriculture", "Business", "Transport"]
     for zone in predefined_zones:
         if zone not in zone_percentages:
             zone_percentages[zone] = 0.0
@@ -695,16 +695,26 @@ async def calculate_zone_percentages(scenario_id: int, is_context: bool = False)
         "Special": "Земли специального назначения",
         "Recreation": "Земли рекреационного назначения",
         "Agriculture": "Земли сельскохозяйственного назначения",
+        "Business": "Земли общественно-делового назначения",
+        "Transport": "Земли транспортного назначения",
         "Water Objects": "Земли водного фонда",
         "Green Objects": "Земли зелёных насаждений",
         "Forests": "Земли лесных массивов"
     }
 
-    human_readable_percentages = {
-        zone_mapping.get(key, key): value for key, value in zone_percentages.items()
-    }
+    other_categories_total = 0.0
+    filtered_zone_percentages = {}
 
-    return human_readable_percentages
+    for key, value in zone_percentages.items():
+        mapped_key = zone_mapping.get(key)
+        if mapped_key:
+            filtered_zone_percentages[mapped_key] = round(value, 2)
+        else:
+            other_categories_total += value
+
+    filtered_zone_percentages["Иные категории земель"] = round(other_categories_total, 2)
+
+    return filtered_zone_percentages
 
 
 async def get_projects_renovation_potential(project_id: int) -> dict:
