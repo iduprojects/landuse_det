@@ -668,7 +668,7 @@ async def calculate_zone_percentages(scenario_id: int, is_context: bool = False)
     forests = physical_objects_dict["forests"]  # новое
     landuse_polygons = landuse_polygons.to_crs(epsg=3857)
 
-    landuse_polygons["landuse_zone"] = landuse_polygons["landuse_zone"].fillna("Residential")
+    landuse_polygons["landuse_zone"] = landuse_polygons["landuse_zone"].replace({None: "Residential", "null": "Residential"}).fillna("Residential")
     landuse_polygons["area"] = landuse_polygons.geometry.area
     total_area_landuse = landuse_polygons["area"].sum()
 
