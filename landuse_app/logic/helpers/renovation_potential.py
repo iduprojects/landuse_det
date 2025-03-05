@@ -17,6 +17,7 @@ from .urban_api_access import get_all_physical_objects_geometries, get_functiona
     get_all_physical_objects_geometries_scen_id_percentages, get_functional_zones_scen_id_percentages, \
     get_projects_base_scenario_id, get_functional_zone_sources
 from ..constants.constants import zone_mapping
+from ...exceptions.http_exception_wrapper import http_exception
 
 pandarallel.initialize(progress_bar=False, nb_workers=4)
 
@@ -396,6 +397,7 @@ async def analyze_geojson_for_renovation_potential(
         landuse_polygons["landuse_zone"] == "Special",
         (landuse_polygons["landuse_zone"] == "Residential") &
         (landuse_polygons["Многоэтажная"] > 50.00),
+        landuse_polygons["Уровень урбанизации"] == "Средне урбанизированная территория",
         landuse_polygons["Уровень урбанизации"] == "Хорошо урбанизированная территория",
         landuse_polygons["Уровень урбанизации"] == "Высоко урбанизированная территория",
     ]
@@ -629,12 +631,28 @@ async def get_renovation_potential(
         how='inner',
         predicate='intersects'
     )
-    joined['intersection_area'] = joined.apply(
-        lambda row: row.geometry.intersection(
-            buffered_gdf.loc[row.index_right].geometry
-        ).area if not row.geometry.intersection(buffered_gdf.loc[row.index_right].geometry).is_empty else 0,
-        axis=1
-    )
+    if joined.empty:
+        logger.info("No intersections between buffers and polygons were found,"
+                    " returning polygons without intersections")
+        landuse_polygons_ren_pot = zones.to_crs(epsg=4326)
+
+        result_json = json.loads(landuse_polygons_ren_pot.to_json())
+        caching_service.save_with_cleanup(
+            result_json, cache_name,
+            {"profile": profile_key,
+             "source": source_key})
+
+        return landuse_polygons_ren_pot
+    else:
+        try:
+            joined['intersection_area'] = joined.apply(
+                lambda row: row.geometry.intersection(
+                    buffered_gdf.loc[row.index_right].geometry
+                ).area if not row.geometry.intersection(buffered_gdf.loc[row.index_right].geometry).is_empty else 0,
+                axis=1
+            )
+        except Exception as e:
+            raise http_exception(500, "Error while searching for intersections between buffers and polygons", e)
 
     grouped = joined.groupby(joined.index)['intersection_area'].sum()
     final_overlap_ratio = grouped / renovated.loc[grouped.index].geometry.area
