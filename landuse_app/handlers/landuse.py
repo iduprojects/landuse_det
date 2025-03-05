@@ -1,8 +1,9 @@
 """Main landuse handlers are defined here."""
+from fastapi import Path, Query
 
-from fastapi import Path
-
+from ..exceptions.http_exception_wrapper import http_exception
 from ..logic import landuse_service
+from ..logic.constants.constants import VALID_SOURCES
 from ..schemas import GeoJSON
 from .routers import renovation_router, urbanization_router, landuse_percentages_router
 
@@ -18,9 +19,16 @@ from .routers import renovation_router, urbanization_router, landuse_percentages
     )
 )
 async def get_projects_renovation_potential(
-    project_id: int = Path(..., description="The unique identifier of the project.")
+    project_id: int = Path(..., description="The unique identifier of the project."),
+    source: str = Query(None, description="The source of the landuse zones data. Available sources are: PZZ, OSM"),
 ) -> GeoJSON:
-    return await landuse_service.get_renovation_potential(project_id)
+    if source is not None and source not in VALID_SOURCES:
+        raise http_exception(
+            422,
+            f"Invalid source. Valid sources are: {', '.join(VALID_SOURCES)}",
+            source
+        )
+    return await landuse_service.get_renovation_potential(project_id, source=source)
 
 
 @urbanization_router.get(
@@ -34,9 +42,16 @@ async def get_projects_renovation_potential(
     )
 )
 async def get_projects_urbanization_level(
-    project_id: int = Path(..., description="The unique identifier of the project.")
+    project_id: int = Path(..., description="The unique identifier of the project."),
+    source: str = Query(None, description="The source of the landuse zones data. Available sources are: PZZ, OSM"),
 ) -> GeoJSON:
-    return await landuse_service.get_urbanization_level(project_id)
+    if source is not None and source not in VALID_SOURCES:
+        raise http_exception(
+            422,
+            f"Invalid source. Valid sources are: {', '.join(VALID_SOURCES)}",
+            source
+        )
+    return await landuse_service.get_urbanization_level(project_id, source=source)
 
 
 @renovation_router.get(
@@ -50,9 +65,16 @@ async def get_projects_urbanization_level(
     )
 )
 async def get_projects_context_renovation_potential(
-    project_id: int = Path(..., description="The unique identifier of the project.")
+    project_id: int = Path(..., description="The unique identifier of the project."),
+    source: str = Query(None, description="The source of the landuse zones data. Available sources are: PZZ, OSM"),
 ) -> GeoJSON:
-    return await landuse_service.get_context_renovation_potential(project_id)
+    if source is not None and source not in VALID_SOURCES:
+        raise http_exception(
+            422,
+            f"Invalid source. Valid sources are: {', '.join(VALID_SOURCES)}",
+            source
+        )
+    return await landuse_service.get_context_renovation_potential(project_id, source=source)
 
 
 @urbanization_router.get(
@@ -66,9 +88,16 @@ async def get_projects_context_renovation_potential(
     )
 )
 async def get_projects_context_urbanization_level(
-    project_id: int = Path(..., description="The unique identifier of the project.")
+    project_id: int = Path(..., description="The unique identifier of the project."),
+    source: str = Query(None, description="The source of the landuse zones data. Available sources are: PZZ, OSM"),
 ) -> GeoJSON:
-    return await landuse_service.get_context_urbanization_level(project_id)
+    if source is not None and source not in VALID_SOURCES:
+        raise http_exception(
+            422,
+            f"Invalid source. Valid sources are: {', '.join(VALID_SOURCES)}",
+            source
+        )
+    return await landuse_service.get_context_urbanization_level(project_id, source=source)
 
 
 @landuse_percentages_router.get(
@@ -81,7 +110,14 @@ async def get_projects_context_urbanization_level(
     )
 )
 async def get_project_landuse_parts(
-    scenario_id: int = Path(..., description="The unique identifier of the scenario.")
+    scenario_id: int = Path(..., description="The unique identifier of the scenario."),
+    source: str = Query(None, description="The source of the landuse zones data. Available sources are: PZZ, OSM"),
 ) -> dict:
-    return await landuse_service.get_project_landuse_parts(scenario_id)
+    if source is not None and source not in VALID_SOURCES:
+        raise http_exception(
+            422,
+            f"Invalid source. Valid sources are: {', '.join(VALID_SOURCES)}",
+            source
+        )
+    return await landuse_service.get_project_landuse_parts(scenario_id, source=source)
 

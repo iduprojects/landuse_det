@@ -41,22 +41,34 @@ async def get_projects_base_scenario_id(project_id: int) -> int:
             return scenario.get("scenario_id")
 
 
-async def get_functional_zone_sources(scenario_id: int) -> dict:
+async def get_functional_zone_sources(scenario_id: int, source: str = None) -> dict:
     """
     Fetch available functional zone sources for a given scenario ID and determine the best source.
 
     Parameters:
     scenario_id (int): The ID of the scenario.
+    source (str, optional): The preferred source (PZZ or OSM). If not provided, the best source is selected automatically.
 
     Returns:
     dict: The most relevant functional zone source data.
+
+    Raises:
+    http_exception: If no sources are found or the specified source is not available.
     """
     endpoint = f"/scenarios/{scenario_id}/functional_zone_sources"
     response = await urban_db_api.get(endpoint)
 
     if not response:
-        raise http_exception(404, "No functional zone sources found for the given scenario ID:", scenario_id)
+        raise http_exception(404, f"No functional zone sources found for the given scenario ID", scenario_id)
 
+    if source:
+        # Если источник указан, ищем его в доступных источниках
+        source_data = next((s for s in response if s["source"] == source), None)
+        if not source_data:
+            raise http_exception(404, f"No data found for the specified source", source)
+        return source_data
+
+    # Если источник не указан, используем текущую логику
     return await _form_source_params(response)
 
 
@@ -76,13 +88,13 @@ async def _form_source_params(sources: list[dict]) -> dict:
     source_names = [i["source"] for i in sources]
     source_data_df = pd.DataFrame(sources)
 
-    if "PZZ" in source_names:
-        return source_data_df.loc[
-            source_data_df[source_data_df["source"] == "PZZ"]["year"].idxmax()
-        ].to_dict()
-    elif "OSM" in source_names:
+    if "OSM" in source_names:
         return source_data_df.loc[
             source_data_df[source_data_df["source"] == "OSM"]["year"].idxmax()
+        ].to_dict()
+    elif "PZZ" in source_names:
+        return source_data_df.loc[
+            source_data_df[source_data_df["source"] == "PZZ"]["year"].idxmax()
         ].to_dict()
     else:
         return source_data_df.loc[
@@ -90,25 +102,26 @@ async def _form_source_params(sources: list[dict]) -> dict:
         ].to_dict()
 
 
-async def get_functional_zones_scenario_id(project_id: int, is_context: bool = False) -> dict:
+async def get_functional_zones_scenario_id(project_id: int, is_context: bool = False, source: str = None) -> dict:
     """
-    Fetches functional zones for a project with an optional context flag.
+    Fetches functional zones for a project with an optional context flag and source selection.
 
     Parameters:
     project_id (int): ID of the project.
     is_context (bool): Flag to determine if context data should be fetched. Default is False.
+    source (str, optional): The preferred source (PZZ or OSM). If not provided, the best source is selected automatically.
 
     Returns:
     dict: Response data from the API.
 
     Raises:
-    HTTPException: If the response is empty.
+    http_exception: If the response is empty or the specified source is not available.
     """
     base_scenario_id = await get_projects_base_scenario_id(project_id)
-    source_data = await get_functional_zone_sources(base_scenario_id)
+    source_data = await get_functional_zone_sources(base_scenario_id, source)
 
     if not source_data or "source" not in source_data or "year" not in source_data:
-        raise http_exception(404, "No valid source found for the given project ID:", project_id)
+        raise http_exception(404, "No valid source found for the given project ID", project_id)
 
     source = source_data["source"]
     year = source_data["year"]
@@ -121,7 +134,7 @@ async def get_functional_zones_scenario_id(project_id: int, is_context: bool = F
 
     response = await urban_db_api.get(endpoint)
     if not response or "features" not in response or not response["features"]:
-        raise http_exception(404, "No functional zones found for the given project ID:", project_id)
+        raise http_exception(404, "No functional zones found for the given project ID", project_id)
 
     return response
 
@@ -138,7 +151,7 @@ async def get_all_physical_objects_geometries(project_id: int, is_context: bool 
         dict: The API response containing geometries.
 
     Raises:
-        HTTPException: If the response is empty.
+        http_exception: If the response is empty.
     """
     base_scenario_id = await get_projects_base_scenario_id(project_id)
 
@@ -163,23 +176,24 @@ async def get_all_physical_objects_geometries_type_id(project_id: int, object_ty
     )
 
 
-async def get_functional_zones_scen_id_percentages(scenario_id: int) -> dict:
+async def get_functional_zones_scen_id_percentages(scenario_id: int, source: str = None) -> dict:
     """
-    Fetches functional zone percentages for a given scenario ID.
+    Fetches functional zone percentages for a given scenario ID with an optional source selection.
 
     Parameters:
     scenario_id (int): The ID of the scenario.
+    source (str, optional): The preferred source (PZZ or OSM). If not provided, the best source is selected automatically.
 
     Returns:
     dict: Response data from the API.
 
     Raises:
-    HTTPException: If the response is empty.
+    http_exception: If the response is empty or the specified source is not available.
     """
-    source_data = await get_functional_zone_sources(scenario_id)
+    source_data = await get_functional_zone_sources(scenario_id, source)
 
     if not source_data or "source" not in source_data or "year" not in source_data:
-        raise http_exception(404, "No valid source found for the given scenario ID:", scenario_id)
+        raise http_exception(404, "No valid source found for the given scenario ID", scenario_id)
 
     source = source_data["source"]
     year = source_data["year"]
@@ -188,7 +202,7 @@ async def get_functional_zones_scen_id_percentages(scenario_id: int) -> dict:
     response = await urban_db_api.get(endpoint)
 
     if not response or "features" not in response or not response["features"]:
-        raise http_exception(404, "No functional zones found for the given scenario ID:", scenario_id)
+        raise http_exception(404, "No functional zones found for the given scenario ID", scenario_id)
 
     return response
 
@@ -203,7 +217,7 @@ async def get_all_physical_objects_geometries_scen_id_percentages(scenario_id: i
         dict: The API response containing geometries.
 
     Raises:
-        HTTPException: If the response is empty.
+        http_exception: If the response is empty.
     """
     endpoint = f"/scenarios/{scenario_id}/geometries_with_all_objects"
     response = await urban_db_api.get(endpoint)
