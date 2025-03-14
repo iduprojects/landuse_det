@@ -5,7 +5,7 @@ from ..exceptions.http_exception_wrapper import http_exception
 from ..logic import landuse_service
 from ..logic.constants.constants import VALID_SOURCES
 from ..schemas import GeoJSON
-from .routers import renovation_router, urbanization_router, landuse_percentages_router
+from .routers import renovation_router, urbanization_router, landuse_percentages_router, territories_urbanization_router
 
 
 @renovation_router.get(
@@ -120,4 +120,84 @@ async def get_project_landuse_parts(
             source
         )
     return await landuse_service.get_project_landuse_parts(scenario_id, source=source)
+
+@territories_urbanization_router.post(
+    "/territory/{territory_id}/calculate_territory_urbanization",
+    response_model=dict,
+    responses={
+        200: {
+            "description": "Successful Response",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "indicator": {
+                            "indicator_id": 16,
+                            "parent_id": 3,
+                            "name_full": "Степень урбанизации территории",
+                            "measurement_unit": {
+                                "id": 3,
+                                "name": "%"
+                            },
+                            "level": 2,
+                            "list_label": "1.3"
+                        },
+                        "territory": {
+                            "id": 13,
+                            "name": "Сабское сельское поселение"
+                        },
+                        "date_type": "year",
+                        "date_value": "2025-01-01",
+                        "value": 10.65,
+                        "value_type": "forecast",
+                        "information_source": "landuse_det",
+                        "created_at": "2025-03-13T11:44:46.727723Z",
+                        "updated_at": "2025-03-13T11:44:46.727723Z"
+                    }
+                }
+            }
+        },
+        422: {
+            "description": "Validation Error"
+        }
+    },
+    description=(
+        "Calculates and saves the urbanization percentage for a given territory in Urban DB. "
+        "Returns a dictionary containing the computed indicator data that was saved in Urban DB."
+    )
+)
+async def get_territory_urbanization_level(
+    territory_id: int = Path(..., description="The unique identifier of the territory."),
+    source: str = Query(None, description="The source of the landuse zones data. Valid options: PZZ, OSM."),
+    force_recalculate: bool = Query(
+        False,
+        description="If True, forces recalculation even if the indicator already exists."
+    )
+) -> dict:
+    """
+    Calculate and store the urbanization percentage for a given territory in Urban DB.
+
+    **Parameters**:
+    - **territory_id** (int): The unique identifier of the territory.
+    - **source** (str, optional): The source of the landuse zones data. Valid options: PZZ or OSM. Defaults to None.
+    - **force_recalculate** (bool, optional): If set to True, forces recalculation even if the indicator exists. Defaults to False.
+
+    **Returns**:
+    - **dict**: A dictionary containing the computed urbanization indicator data.
+
+    **Raises**:
+    - **HTTPException (422)**: If the provided `source` is invalid.
+    """
+    if source is not None and source not in VALID_SOURCES:
+        raise http_exception(
+            422,
+            f"Invalid source. Valid sources are: {', '.join(VALID_SOURCES)}",
+            source
+        )
+    return await landuse_service.get_territory_urbanization_level(
+        territory_id,
+        source=source,
+        force_recalculate=force_recalculate
+    )
+
+
 
