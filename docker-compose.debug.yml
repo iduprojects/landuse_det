@@ -1,4 +1,4 @@
-version: '1.0'
+name: landuse_det
 
 services:
   landuse_det:

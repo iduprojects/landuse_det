@@ -1,9 +1,6 @@
 # Используем Python 3.12
 FROM python:3.12.8
 
-# Открываем порт для приложения
-EXPOSE 80
-
 # Keeps Python from generating .pyc files in the container
 ENV PYTHONDONTWRITEBYTECODE=1
 
