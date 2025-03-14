@@ -13,5 +13,9 @@ class ApplicationConfig:
     def get(key: str) -> str | None:
         return os.getenv(key)
 
+    @staticmethod
+    def get_bool(key: str) -> bool:
+        val = os.getenv(key)
+        return val is not None and val.lower() in ("true", "1", "yes")
 
 config = ApplicationConfig()
