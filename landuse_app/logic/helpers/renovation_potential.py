@@ -142,19 +142,19 @@ async def extract_physical_objects(project_id: int, is_context: bool, scenario_i
     all_data_gdf = all_data_gdf.drop_duplicates(subset='physical_object_id')
     all_data_gdf = all_data_gdf[all_data_gdf.geometry.type.isin(['Polygon', 'MultiPolygon'])]
 
-    utm_crs = all_data_gdf.estimate_utm_crs()
-    logger.info(f"Рассчитанная UTM проекция: {utm_crs.to_string()}")
+    local_crs = all_data_gdf.estimate_utm_crs()
+
     water_objects_gdf = all_data_gdf[
         all_data_gdf['object_type'].isin(["Озеро", "Водный объект", "Река"])
-    ].to_crs(utm_crs)
+    ].to_crs(local_crs)
 
     green_objects_gdf = all_data_gdf[
         all_data_gdf['object_type'].isin(["Травяное покрытие", "Зелёная зона"])
-    ].to_crs(utm_crs)
+    ].to_crs(local_crs)
 
     forests_gdf = all_data_gdf[
         all_data_gdf['object_type'].isin(["Лес"])
-    ].to_crs(utm_crs)
+    ].to_crs(local_crs)
 
     return {
         "physical_objects": all_data_gdf,
@@ -236,8 +236,6 @@ async def extract_landuse( project_id: int, is_context: bool, scenario_id_flag: 
         "zone_type_nickname": {"unknown": "Жилая зона"}
     }, inplace=True)
 
-    utm_crs = landuse_polygons.estimate_utm_crs()
-    landuse_polygons = landuse_polygons.to_crs(utm_crs)
     logger.info("Функциональные зоны загружены")
     return landuse_polygons
 
@@ -400,6 +398,7 @@ async def analyze_geojson_for_renovation_potential(
     """
     utm_crs = landuse_polygons.estimate_utm_crs()
     landuse_polygons = landuse_polygons.to_crs(utm_crs)
+    landuse_polygons = landuse_polygons.to_crs(epsg=3857)
     landuse_polygons["Площадь"] = landuse_polygons.geometry.area
     landuse_polygons["Потенциал"] = "Подлежащие реновации"
 
@@ -606,13 +605,11 @@ async def get_renovation_potential(
         extract_landuse(project_id, is_context, scenario_id, source)
     )
     physical_objects = physical_objects_dict["physical_objects"]
-    physical_objects_utm_crs = physical_objects.estimate_utm_crs()
-    physical_objects = landuse_polygons.to_crs(physical_objects_utm_crs)
-
-    utm_crs = landuse_polygons.estimate_utm_crs()
+    utm_crs = physical_objects.estimate_utm_crs()
+    physical_objects = physical_objects.to_crs(utm_crs)
     landuse_polygons = landuse_polygons.to_crs(utm_crs)
-    logger.info("Функциональные зоны и физические объекты получены")
 
+    logger.info("Функциональные зоны и физические объекты получены")
     landuse_polygons = landuse_polygons[landuse_polygons.geometry.type.isin(['Polygon', 'MultiPolygon'])]
     landuse_polygons["Процент профильных объектов"] = 0.0
     landuse_polygons["Любые здания /на зону"] = 0.0
@@ -631,10 +628,10 @@ async def get_renovation_potential(
 
     landuse_polygons_ren_pot = await analyze_geojson_for_renovation_potential(landuse_polygons, profile_for_analysis)
     logger.info("Потенциал для реновации рассчитан")
-    zones_utm_crs = landuse_polygons_ren_pot.estimate_utm_crs()
-    zones = landuse_polygons_ren_pot.to_crs(zones_utm_crs)
+
+    zones = landuse_polygons_ren_pot.to_crs(utm_crs)
     non_renovated = zones[pd.isna(zones['Потенциал'])]
-    buffered_geometries = non_renovated.buffer(300)
+    buffered_geometries = non_renovated.buffer(200)
     buffered_gdf = gpd.GeoDataFrame(geometry=buffered_geometries, crs=zones.crs)
     renovated = zones[
         (zones['Потенциал'] == 'Подлежащие реновации')
@@ -828,6 +825,7 @@ async def get_projects_renovation_potential(project_id: int, source: str = None)
 
 async def get_projects_urbanization_level(project_id: int, source: str = None) -> GeoJSON:
     """Calculate urbanization level for project."""
+    logger.info(f"Calculating urbanization level for project {project_id}")
     landuse_polygons = await get_renovation_potential(project_id, is_context=False, source=source)
     landuse_polygons = await filter_response(landuse_polygons)
     return GeoJSON.from_geodataframe(landuse_polygons)
@@ -835,6 +833,7 @@ async def get_projects_urbanization_level(project_id: int, source: str = None) -
 
 async def get_projects_context_renovation_potential(project_id: int, source: str = None) -> dict:
     """Calculate renovation potential for project's context."""
+    logger.info(f"Calculating renovation potential for project {project_id}")
     landuse_polygons = await get_renovation_potential(project_id, is_context=True, source=source)
 
     discomfort_value = (
@@ -855,11 +854,13 @@ async def get_projects_context_renovation_potential(project_id: int, source: str
 
 async def get_projects_context_urbanization_level(project_id: int, source: str = None) -> GeoJSON:
     """Calculate urbanization level for project's context."""
+    logger.info(f"Calculating urbanization level for project {project_id}")
     landuse_polygons = await get_renovation_potential(project_id, is_context=True, source=source)
     landuse_polygons = await filter_response(landuse_polygons)
     return GeoJSON.from_geodataframe(landuse_polygons)
 
 
 async def get_projects_landuse_parts_scen_id_main_method(scenario_id: int, source: str = None) -> dict:
+    logger.info(f"Calculating landuse parts for scenario {scenario_id}")
     landuse_parts = await calculate_zone_percentages(scenario_id, source=source)
     return landuse_parts
