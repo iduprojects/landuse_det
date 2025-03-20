@@ -142,10 +142,19 @@ async def extract_physical_objects(project_id: int, is_context: bool, scenario_i
     all_data_gdf = all_data_gdf.drop_duplicates(subset='physical_object_id')
     all_data_gdf = all_data_gdf[all_data_gdf.geometry.type.isin(['Polygon', 'MultiPolygon'])]
 
-    water_objects_gdf = all_data_gdf[all_data_gdf['object_type'].isin(["Озеро", "Водный объект", "Река"])].to_crs(3857)
-    green_objects_gdf = all_data_gdf[all_data_gdf['object_type'].isin(["Травяное покрытие", "Зелёная зона"])].to_crs(
-        3857)
-    forests_gdf = all_data_gdf[all_data_gdf['object_type'].isin(["Лес"])].to_crs(3857)
+    utm_crs = all_data_gdf.estimate_utm_crs()
+    logger.info(f"Рассчитанная UTM проекция: {utm_crs.to_string()}")
+    water_objects_gdf = all_data_gdf[
+        all_data_gdf['object_type'].isin(["Озеро", "Водный объект", "Река"])
+    ].to_crs(utm_crs)
+
+    green_objects_gdf = all_data_gdf[
+        all_data_gdf['object_type'].isin(["Травяное покрытие", "Зелёная зона"])
+    ].to_crs(utm_crs)
+
+    forests_gdf = all_data_gdf[
+        all_data_gdf['object_type'].isin(["Лес"])
+    ].to_crs(utm_crs)
 
     return {
         "physical_objects": all_data_gdf,
@@ -227,6 +236,8 @@ async def extract_landuse( project_id: int, is_context: bool, scenario_id_flag: 
         "zone_type_nickname": {"unknown": "Жилая зона"}
     }, inplace=True)
 
+    utm_crs = landuse_polygons.estimate_utm_crs()
+    landuse_polygons = landuse_polygons.to_crs(utm_crs)
     logger.info("Функциональные зоны загружены")
     return landuse_polygons
 
@@ -387,7 +398,8 @@ async def analyze_geojson_for_renovation_potential(
     Returns:
     GeoDataFrame: Processed data with updated calculations and columns.
     """
-    landuse_polygons = landuse_polygons.to_crs(epsg=3857)
+    utm_crs = landuse_polygons.estimate_utm_crs()
+    landuse_polygons = landuse_polygons.to_crs(utm_crs)
     landuse_polygons["Площадь"] = landuse_polygons.geometry.area
     landuse_polygons["Потенциал"] = "Подлежащие реновации"
 
@@ -594,10 +606,13 @@ async def get_renovation_potential(
         extract_landuse(project_id, is_context, scenario_id, source)
     )
     physical_objects = physical_objects_dict["physical_objects"]
-    physical_objects = physical_objects.to_crs(epsg=3857)
-    landuse_polygons = landuse_polygons.to_crs(epsg=3857)
+    physical_objects_utm_crs = physical_objects.estimate_utm_crs()
+    physical_objects = landuse_polygons.to_crs(physical_objects_utm_crs)
 
+    utm_crs = landuse_polygons.estimate_utm_crs()
+    landuse_polygons = landuse_polygons.to_crs(utm_crs)
     logger.info("Функциональные зоны и физические объекты получены")
+
     landuse_polygons = landuse_polygons[landuse_polygons.geometry.type.isin(['Polygon', 'MultiPolygon'])]
     landuse_polygons["Процент профильных объектов"] = 0.0
     landuse_polygons["Любые здания /на зону"] = 0.0
@@ -616,8 +631,8 @@ async def get_renovation_potential(
 
     landuse_polygons_ren_pot = await analyze_geojson_for_renovation_potential(landuse_polygons, profile_for_analysis)
     logger.info("Потенциал для реновации рассчитан")
-
-    zones = landuse_polygons_ren_pot.to_crs(3857)
+    zones_utm_crs = landuse_polygons_ren_pot.estimate_utm_crs()
+    zones = landuse_polygons_ren_pot.to_crs(zones_utm_crs)
     non_renovated = zones[pd.isna(zones['Потенциал'])]
     buffered_geometries = non_renovated.buffer(300)
     buffered_gdf = gpd.GeoDataFrame(geometry=buffered_geometries, crs=zones.crs)
@@ -740,7 +755,8 @@ async def calculate_zone_percentages(scenario_id: int, is_context: bool = False,
     water_objects = physical_objects_dict["water_objects"]
     green_objects = physical_objects_dict["green_objects"]  # новое
     forests = physical_objects_dict["forests"]  # новое
-    landuse_polygons = landuse_polygons.to_crs(epsg=3857)
+    utm_crs = landuse_polygons.estimate_utm_crs()
+    landuse_polygons = landuse_polygons.to_crs(utm_crs)
 
     landuse_polygons["landuse_zone"] = landuse_polygons["landuse_zone"].replace({None: "Residential", "null": "Residential"}).fillna("Residential")
     landuse_polygons["area"] = landuse_polygons.geometry.area
