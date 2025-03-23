@@ -1,4 +1,7 @@
+import asyncio
+
 import pandas as pd
+from loguru import logger
 
 from landuse_app.exceptions.http_exception_wrapper import http_exception
 from landuse_app.logic.api import urban_db_api
@@ -62,13 +65,11 @@ async def get_functional_zone_sources(scenario_id: int, source: str = None) -> d
         raise http_exception(404, f"No functional zone sources found for the given scenario ID", scenario_id)
 
     if source:
-        # Если источник указан, ищем его в доступных источниках
         source_data = next((s for s in response if s["source"] == source), None)
         if not source_data:
             raise http_exception(404, f"No data found for the specified source", source)
         return source_data
 
-    # Если источник не указан, используем текущую логику
     return await _form_source_params(response)
 
 
@@ -357,4 +358,48 @@ async def put_indicator_value(indicator_data: dict) -> dict:
     """
     endpoint = "/indicator_value"
     return await urban_db_api.put(endpoint, data=indicator_data)
+
+
+async def get_physical_objects_from_territory_parallel(territory_id: int, page_size: int = 10000) -> list[dict]:
+    """
+    Fetch physical objects from a territory in parallel with a concurrency limit of 5.
+
+    This asynchronous function retrieves all physical objects for a given territory using the
+    endpoint /territory/{territory_id}/physical_objects_with_geometry. It paginates through the results
+    based on the provided page_size and uses the get() method from urban_db_api (which is based on aiohttp)
+    to make API requests. The function limits concurrent requests to 5.
+
+    Parameters:
+        territory_id (int): The unique identifier of the territory.
+        page_size (int, optional): The number of objects to request per page (default is 10000).
+
+    Returns:
+        list[dict]: A list of dictionaries, where each dictionary represents a physical object.
+    """
+    endpoint = f"/territory/{territory_id}/physical_objects_with_geometry?page=1&page_size={page_size}"
+    initial_response = await urban_db_api.get(endpoint)
+    total = initial_response.get("count", 0)
+    total_pages = (total // page_size) + (1 if total % page_size else 0)
+    logger.info(f"Всего объектов: {total}, Всего страниц: {total_pages}")
+
+    urls = [
+        f"/territory/{territory_id}/physical_objects_with_geometry?page={i}&page_size={page_size}"
+        for i in range(1, total_pages + 1)
+    ]
+
+    semaphore = asyncio.Semaphore(5)
+
+    async def fetch_page_with_sem(url: str) -> dict:
+        async with semaphore:
+            data = await urban_db_api.get(url)
+            logger.info(f"Страница {url} загружена")
+            return data
+
+    tasks = [fetch_page_with_sem(url) for url in urls]
+    pages = await asyncio.gather(*tasks)
+
+    results = []
+    for page in pages:
+        results.extend(page.get("results", []))
+    return results
 
