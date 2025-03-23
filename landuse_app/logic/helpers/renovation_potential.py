@@ -352,6 +352,7 @@ async def assign_development_type(landuse_polygons: gpd.GeoDataFrame) -> gpd.Geo
     conditions = [
         (landuse_polygons["landuse_zone"] == "Residential") & (landuse_polygons["Многоэтажная"] > 30.00),
         (landuse_polygons["landuse_zone"] == "Residential") & (landuse_polygons["Среднеэтажная"] > 40.00),
+        (landuse_polygons["landuse_zone"] == "Special"),
 
         (landuse_polygons["Процент профильных объектов"].isna()) | (landuse_polygons["Любые здания /на зону"] == 0.0),
         (landuse_polygons["Процент профильных объектов"] < 10.00),
@@ -364,6 +365,7 @@ async def assign_development_type(landuse_polygons: gpd.GeoDataFrame) -> gpd.Geo
     urbanization_levels = [
         "Высоко урбанизированная территория",  # Residential + Многоэтажная > 30%
         "Высоко урбанизированная территория",  # Residential + Среднеэтажная > 40%
+        "Высоко урбанизированная территория",  # Special
 
         "Мало урбанизированная территория",  # No data or 0%
         "Мало урбанизированная территория",  # <10%
@@ -398,7 +400,6 @@ async def analyze_geojson_for_renovation_potential(
     """
     utm_crs = landuse_polygons.estimate_utm_crs()
     landuse_polygons = landuse_polygons.to_crs(utm_crs)
-    landuse_polygons = landuse_polygons.to_crs(epsg=3857)
     landuse_polygons["Площадь"] = landuse_polygons.geometry.area
     landuse_polygons["Потенциал"] = "Подлежащие реновации"
 
@@ -631,7 +632,7 @@ async def get_renovation_potential(
 
     zones = landuse_polygons_ren_pot.to_crs(utm_crs)
     non_renovated = zones[pd.isna(zones['Потенциал'])]
-    buffered_geometries = non_renovated.buffer(200)
+    buffered_geometries = non_renovated.buffer(300)
     buffered_gdf = gpd.GeoDataFrame(geometry=buffered_geometries, crs=zones.crs)
     renovated = zones[
         (zones['Потенциал'] == 'Подлежащие реновации')
