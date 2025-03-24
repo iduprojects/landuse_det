@@ -3,7 +3,6 @@ from datetime import datetime
 import geopandas as gpd
 import pandas as pd
 from loguru import logger
-from shapely.validation import make_valid
 from shapely.geometry import shape
 import asyncio
 from pandarallel import pandarallel
@@ -51,7 +50,7 @@ def parse_physical_object(obj: dict[str, any]) -> list[dict[str, any]]:
         if shp.is_empty:
             return []
     except Exception as e:
-        logger.error(f"Ошибка при формировании geometry: {e}")
+        logger.error(f"Error creating geometry: {e}")
         return []
 
     object_data = {
@@ -138,7 +137,7 @@ async def extract_physical_objects_from_territory(territory_id: int) -> dict[str
                 - "green_objects": total area of green objects (in square meters)
                 - "forests": total area of forest objects (in square meters)
         """
-    logger.info("Физические объекты загружаются (с параллельной загрузкой)")
+    logger.info("Physical objects are loading with parallel processing")
     raw_objects = await get_physical_objects_from_territory_parallel(territory_id)
     all_data = []
 
@@ -146,7 +145,7 @@ async def extract_physical_objects_from_territory(territory_id: int) -> dict[str
         parsed_objects = parse_physical_object(obj)
         all_data.extend(parsed_objects)
 
-    logger.success("Физические объекты получены, создается  GeoDataFrame")
+    logger.success("Physical objects are loaded, creating the  GeoDataFrame")
     all_data_df = pd.DataFrame(all_data)
     all_data_gdf = gpd.GeoDataFrame(all_data_df, geometry="geometry", crs="EPSG:4326")
     all_data_gdf = all_data_gdf.drop_duplicates(subset='physical_object_id')
@@ -166,7 +165,7 @@ async def extract_physical_objects_from_territory(territory_id: int) -> dict[str
         all_data_gdf['object_type'].isin(["Лес"])
     ].to_crs(local_crs)
 
-    logger.success("Физические объекты успешно обработаны")
+    logger.success("Physical objects are successfully loaded into GeoDataFrame")
     return {
         "physical_objects": all_data_gdf,
         "water_objects": water_objects_gdf.area.sum(),
@@ -196,7 +195,7 @@ async def extract_landuse_from_territory(territory_id, source: str = None,)\
         If the input data is malformed or invalid.
     """
     geojson_data = await get_functional_zones_territory_id(territory_id, source)
-    logger.info("Функциональные зоны загружаются")
+    logger.info("Functional zones are loading")
 
     features = geojson_data
     geometries = []
@@ -248,7 +247,7 @@ async def extract_landuse_from_territory(territory_id, source: str = None,)\
 
     if 'landuse_zone' not in landuse_polygons.columns:
         landuse_polygons['landuse_zone'] = 'Residential'
-    logger.success("Функциональные зоны загружены")
+    logger.success("Functional zones are loaded")
     return landuse_polygons
 
 
@@ -300,76 +299,85 @@ async def get_territory_renovation_potential(
         extract_physical_objects_from_territory(territory_id),
         extract_landuse_from_territory(territory_id, source)
     )
-    logger.success("Физические объекты загружены")
+    logger.success("Physical objects are loaded")
     physical_objects = physical_objects_dict["physical_objects"]
     utm_crs = physical_objects.estimate_utm_crs()
     physical_objects = physical_objects.to_crs(utm_crs)
     landuse_polygons = landuse_polygons.to_crs(utm_crs)
 
-    logger.success("Функциональные зоны и физические объекты получены")
+    logger.success("Functional objects and physical objects are loaded")
     landuse_polygons = landuse_polygons[landuse_polygons.geometry.type.isin(['Polygon', 'MultiPolygon'])]
     landuse_polygons["Процент профильных объектов"] = 0.0
     landuse_polygons["Любые здания /на зону"] = 0.0
-    logger.success("Функциональные зоны и физические объекты отфильтрованы")
+    logger.success("Functional zones and physical objects are filtered")
 
     landuse_polygons = await process_zones_with_bulk_update(landuse_polygons, physical_objects,
                                                             zone_mapping)
-    logger.success("Проценты зданий посчитаны")
+    logger.success("Building percentages are calculated")
 
     landuse_polygons = await assign_development_type(landuse_polygons)
-    logger.success("Уровень урбанизации присвоен")
+    logger.success("Urbanization level is calculated")
 
     landuse_polygons_ren_pot = await analyze_geojson_for_renovation_potential(landuse_polygons)
-    logger.success("Потенциал для реновации рассчитан")
+    logger.success("Renovation potential is calculated")
 
-    zones = landuse_polygons_ren_pot.to_crs(utm_crs)
-    non_renovated = zones[pd.isna(zones['Потенциал'])]
-    non_renovated["geometry"] = non_renovated["geometry"].apply(make_valid)
-    non_renovated = non_renovated[non_renovated.is_valid]
-    buffered_geometries = non_renovated.buffer(300)
-    buffered_gdf = gpd.GeoDataFrame(geometry=buffered_geometries, crs=zones.crs)
-    renovated = zones[
-        (zones['Потенциал'] == 'Подлежащие реновации')
-        ]
+    # zones = landuse_polygons_ren_pot.to_crs(utm_crs)
+    #
+    # # Применяем simplify с допуском 5 метров для упрощения геометрии
+    # zones["geometry"] = zones["geometry"].apply(lambda geom: geom.simplify(5))
+    #
+    # non_renovated = zones[pd.isna(zones['Потенциал'])]
+    # non_renovated = non_renovated[non_renovated.is_valid]
+    # logger.success("123")
+    #
+    # # Создаем буфер с расстоянием 300 м и разрешением 8 (по умолчанию 16)
+    # buffered_geometries = non_renovated.buffer(300, resolution=8)
+    # buffered_gdf = gpd.GeoDataFrame(geometry=buffered_geometries, crs=zones.crs)
+    # logger.success("456")
+    #
+    # renovated = zones[zones['Потенциал'] == 'Подлежащие реновации']
+    #
+    # joined = gpd.sjoin(
+    #     renovated,
+    #     buffered_gdf,
+    #     how='inner',
+    #     predicate='intersects'
+    # )
+    # logger.success("789")
+    #
+    # joined = fix_invalid_geometries(joined)
+    # logger.success("1488")
+    #
+    # if joined.empty:
+    #     logger.info(
+    #         "No intersections between buffers and polygons were found, returning polygons without intersections")
+    #     landuse_polygons_ren_pot = zones.to_crs(epsg=4326)
+    #
+    #     result_json = json.loads(landuse_polygons_ren_pot.to_json())
+    #     caching_service.save_with_cleanup(
+    #         result_json, cache_name,
+    #         {"profile": "no_profile",
+    #          "source": source_key})
+    #     return landuse_polygons_ren_pot
+    # else:
+    #     logger.success("999")
+    #     try:
+    #         joined['intersection_area'] = joined.apply(
+    #             lambda row: row.geometry.intersection(
+    #                 buffered_gdf.loc[row.index_right].geometry
+    #             ).area if not row.geometry.intersection(buffered_gdf.loc[row.index_right].geometry).is_empty else 0,
+    #             axis=1
+    #         )
+    #     except Exception as e:
+    #         raise http_exception(500, "Error while searching for intersections between buffers and polygons", str(e))
+    # logger.success("999999999")
+    # grouped = joined.groupby(joined.index)['intersection_area'].sum()
+    # final_overlap_ratio = grouped / renovated.loc[grouped.index].geometry.area
+    # to_update = final_overlap_ratio[final_overlap_ratio > 0.50].index
+    # zones.loc[to_update, 'Потенциал'] = 'Не подлежащие реновации'
+    # landuse_polygons_ren_pot = zones.to_crs(epsg=4326)
 
-    joined = gpd.sjoin(
-        renovated,
-        buffered_gdf,
-        how='inner',
-        predicate='intersects'
-    )
-    joined["geometry"] = joined["geometry"].apply(make_valid)
-    if joined.empty:
-        logger.info("No intersections between buffers and polygons were found,"
-                    " returning polygons without intersections")
-        landuse_polygons_ren_pot = zones.to_crs(epsg=4326)
-
-        result_json = json.loads(landuse_polygons_ren_pot.to_json())
-        caching_service.save_with_cleanup(
-            result_json, cache_name,
-            {"profile": "no_profile",
-             "source": source_key})
-
-        return landuse_polygons_ren_pot
-    else:
-        try:
-
-            joined['intersection_area'] = joined.apply(
-                lambda row: row.geometry.intersection(
-                    buffered_gdf.loc[row.index_right].geometry
-                ).area if not row.geometry.intersection(buffered_gdf.loc[row.index_right].geometry).is_empty else 0,
-                axis=1
-            )
-        except Exception as e:
-            raise http_exception(500, "Error while searching for intersections between buffers and polygons", str(e))
-
-    grouped = joined.groupby(joined.index)['intersection_area'].sum()
-    final_overlap_ratio = grouped / renovated.loc[grouped.index].geometry.area
-    to_update = final_overlap_ratio[final_overlap_ratio > 0.50].index
-    zones.loc[to_update, 'Потенциал'] = 'Не подлежащие реновации'
-    landuse_polygons_ren_pot = zones.to_crs(epsg=4326)
-
-    result_json = json.loads(landuse_polygons_ren_pot .to_json())
+    result_json = json.loads(landuse_polygons_ren_pot.to_json())
     caching_service.save_with_cleanup(
         result_json, cache_name,
         {"profile": "no_profile",
