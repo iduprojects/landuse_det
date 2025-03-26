@@ -3,6 +3,7 @@ import asyncio
 import pandas as pd
 from loguru import logger
 
+from landuse_app import config
 from landuse_app.exceptions.http_exception_wrapper import http_exception
 from landuse_app.logic.api import urban_db_api
 
@@ -360,7 +361,7 @@ async def put_indicator_value(indicator_data: dict) -> dict:
     return await urban_db_api.put(endpoint, data=indicator_data)
 
 
-async def get_physical_objects_from_territory_parallel(territory_id: int, page_size: int = 10000) -> list[dict]:
+async def get_physical_objects_from_territory_parallel(territory_id: int, page_size: int = int(config.get("PAGE_SIZE"))) -> list[dict]:
     """
     Fetch physical objects from a territory in parallel with a concurrency limit of 5.
 
@@ -371,7 +372,7 @@ async def get_physical_objects_from_territory_parallel(territory_id: int, page_s
 
     Parameters:
         territory_id (int): The unique identifier of the territory.
-        page_size (int, optional): The number of objects to request per page (default is 10000).
+        page_size (int, optional): The number of objects to request per page (default is 5000).
 
     Returns:
         list[dict]: A list of dictionaries, where each dictionary represents a physical object.
