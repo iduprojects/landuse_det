@@ -367,7 +367,7 @@ async def get_physical_objects_from_territory_parallel(territory_id: int, page_s
 
     This asynchronous function retrieves all physical objects for a given territory using the
     endpoint /territory/{territory_id}/physical_objects_with_geometry. It paginates through the results
-    based on the provided page_size and uses the get() method from urban_db_api (which is based on aiohttp)
+    based on the provided page_size and uses the get() method from urban_db_api
     to make API requests. The function limits concurrent requests to 5.
 
     Parameters:
@@ -381,7 +381,7 @@ async def get_physical_objects_from_territory_parallel(territory_id: int, page_s
     initial_response = await urban_db_api.get(endpoint)
     total = initial_response.get("count", 0)
     total_pages = (total // page_size) + (1 if total % page_size else 0)
-    logger.info(f"Всего объектов: {total}, Всего страниц: {total_pages}")
+    logger.info(f"Total physical objects on territory: {total}, Total number of pages: {total_pages}")
 
     urls = [
         f"/territory/{territory_id}/physical_objects_with_geometry?page={i}&page_size={page_size}"
@@ -393,7 +393,7 @@ async def get_physical_objects_from_territory_parallel(territory_id: int, page_s
     async def fetch_page_with_sem(url: str) -> dict:
         async with semaphore:
             data = await urban_db_api.get(url)
-            logger.info(f"Страница {url} загружена")
+            logger.info(f"Page {url} has been loaded")
             return data
 
     tasks = [fetch_page_with_sem(url) for url in urls]
