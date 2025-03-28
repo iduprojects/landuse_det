@@ -8,7 +8,7 @@ from storage.caching import CachingService, caching_service
 
 class UrbanDbAPI:
     def __init__(self, url: str, bearer_token: dict[str, str] = None, cache_service: CachingService = None):
-        self.url = config.get("DIG_TP_API")
+        self.url = config.get("URBAN_API")
         self.bearer_token = {"Authorization": bearer_token} if bearer_token else {}
         self.cache_service = cache_service
 
@@ -48,7 +48,7 @@ class UrbanDbAPI:
                 logger.error(f"Error from API (PUT): {error_details}")
                 raise http_exception(response.status, f"Failed to PUT data to Urban API:", error_details)
 
-urban_db_api = UrbanDbAPI(config.get("DIG_TP_API"), cache_service=caching_service)
+urban_db_api = UrbanDbAPI(config.get("URBAN_API"), cache_service=caching_service)
 
 
 
