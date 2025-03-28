@@ -1,4 +1,5 @@
 import asyncio
+from math import ceil
 
 import pandas as pd
 from loguru import logger
@@ -18,7 +19,7 @@ async def get_projects_territory(project_id: int) -> dict:
     Returns:
     dict: Territory information.
     """
-    endpoint = f"/projects/{project_id}/territory"
+    endpoint = f"/api/v1/projects/{project_id}/territory"
     response = await urban_db_api.get(endpoint)
 
     if not response:
@@ -37,7 +38,7 @@ async def get_projects_base_scenario_id(project_id: int) -> int:
     Returns:
     int: Base scenario ID.
     """
-    endpoint = f"/projects/{project_id}/scenarios"
+    endpoint = f"/api/v1/projects/{project_id}/scenarios"
     scenarios = await urban_db_api.get(endpoint)
 
     for scenario in scenarios:
@@ -59,7 +60,7 @@ async def get_functional_zone_sources(scenario_id: int, source: str = None) -> d
     Raises:
     http_exception: If no sources are found or the specified source is not available.
     """
-    endpoint = f"/scenarios/{scenario_id}/functional_zone_sources"
+    endpoint = f"/api/v1/scenarios/{scenario_id}/functional_zone_sources"
     response = await urban_db_api.get(endpoint)
 
     if not response:
@@ -129,9 +130,9 @@ async def get_functional_zones_scenario_id(project_id: int, is_context: bool = F
     year = source_data["year"]
 
     endpoint = (
-        f"/projects/{project_id}/context/functional_zones?year={year}&source={source}"
+        f"/api/v1/projects/{project_id}/context/functional_zones?year={year}&source={source}"
         if is_context
-        else f"/scenarios/{base_scenario_id}/functional_zones?year={year}&source={source}"
+        else f"/api/v1/scenarios/{base_scenario_id}/functional_zones?year={year}&source={source}"
     )
 
     response = await urban_db_api.get(endpoint)
@@ -158,9 +159,9 @@ async def get_all_physical_objects_geometries(project_id: int, is_context: bool 
     base_scenario_id = await get_projects_base_scenario_id(project_id)
 
     endpoint = (
-        f"/projects/{project_id}/context/geometries_with_all_objects"
+        f"/api/v1/projects/{project_id}/context/geometries_with_all_objects"
         if is_context
-        else f"/scenarios/{base_scenario_id}/geometries_with_all_objects"
+        else f"/api/v1/scenarios/{base_scenario_id}/geometries_with_all_objects"
     )
 
     try:
@@ -174,7 +175,7 @@ async def get_all_physical_objects_geometries(project_id: int, is_context: bool 
 async def get_all_physical_objects_geometries_type_id(project_id: int, object_type_id: int) -> dict:
     base_scenario_id = await get_projects_base_scenario_id(project_id)
     return await urban_db_api.get(
-        f"/scenarios/{base_scenario_id}/geometries_with_all_objects?physical_object_type_id={object_type_id}"
+        f"/api/v1/scenarios/{base_scenario_id}/geometries_with_all_objects?physical_object_type_id={object_type_id}"
     )
 
 
@@ -200,7 +201,7 @@ async def get_functional_zones_scen_id_percentages(scenario_id: int, source: str
     source = source_data["source"]
     year = source_data["year"]
 
-    endpoint = f"/scenarios/{scenario_id}/functional_zones?year={year}&source={source}"
+    endpoint = f"/api/v1/scenarios/{scenario_id}/functional_zones?year={year}&source={source}"
     response = await urban_db_api.get(endpoint)
 
     if not response or "features" not in response or not response["features"]:
@@ -221,7 +222,7 @@ async def get_all_physical_objects_geometries_scen_id_percentages(scenario_id: i
     Raises:
         http_exception: If the response is empty.
     """
-    endpoint = f"/scenarios/{scenario_id}/geometries_with_all_objects"
+    endpoint = f"/api/v1/scenarios/{scenario_id}/geometries_with_all_objects"
     response = await urban_db_api.get(endpoint)
 
     if not response or "features" not in response or not response["features"]:
@@ -243,7 +244,7 @@ async def get_functional_zone_sources_territory_id(territory_id: int, source: st
         Raises:
         http_exception: If no sources are found or the specified source is not available.
         """
-    endpoint = f"/territory/{territory_id}/functional_zone_sources"
+    endpoint = f"/api/v1/territory/{territory_id}/functional_zone_sources"
     response = await urban_db_api.get(endpoint)
 
     if not response:
@@ -281,7 +282,7 @@ async def get_functional_zones_territory_id(territory_id: int, source: str = Non
     year = source_data["year"]
 
     endpoint = (
-        f"/territory/{territory_id}/functional_zones?year={year}&source={source}"
+        f"/api/v1/territory/{territory_id}/functional_zones?year={year}&source={source}"
     )
 
     response = await urban_db_api.get(endpoint)
@@ -305,7 +306,7 @@ async def get_physical_objects_from_territory(territory_id: int) -> dict:
     """
 
     endpoint = (
-        f"/territory/{territory_id}/physical_objects_geojson"
+        f"/api/v1/territory/{territory_id}/physical_objects_geojson"
     )
 
 
@@ -324,7 +325,7 @@ async def check_indicator_exists(territory_id: int) -> dict | None:
       - None: If the response status is 404 (i.e., the indicator does not exist).
     """
     endpoint = (
-        "/indicator_value"
+        "/api/v1/indicator_value"
         "?indicator_id=16"
         f"&territory_id={territory_id}"
         "&date_type=year"
@@ -357,50 +358,52 @@ async def put_indicator_value(indicator_data: dict) -> dict:
     Raises:
       http_exception: If the response status code is not 200 or 201.
     """
-    endpoint = "/indicator_value"
+    endpoint = "/api/v1/indicator_value"
     return await urban_db_api.put(endpoint, data=indicator_data)
 
 
 async def get_physical_objects_from_territory_parallel(territory_id: int, page_size: int = int(config.get("PAGE_SIZE"))) -> list[dict]:
     """
-    Fetch physical objects from a territory in parallel with a concurrency limit of 5.
-
-    This asynchronous function retrieves all physical objects for a given territory using the
-    endpoint /territory/{territory_id}/physical_objects_with_geometry. It paginates through the results
-    based on the provided page_size and uses the get() method from urban_db_api
-    to make API requests. The function limits concurrent requests to 5.
-
-    Parameters:
-        territory_id (int): The unique identifier of the territory.
-        page_size (int, optional): The number of objects to request per page (default is 5000).
-
-    Returns:
-        list[dict]: A list of dictionaries, where each dictionary represents a physical object.
+    Fetch physical objects using cursor-based pagination.
+    Logs total pages count based on API 'count' field.
     """
-    endpoint = f"/territory/{territory_id}/physical_objects_with_geometry?page=1&page_size={page_size}"
-    initial_response = await urban_db_api.get(endpoint)
-    total = initial_response.get("count", 0)
-    total_pages = (total // page_size) + (1 if total % page_size else 0)
-    logger.info(f"Total physical objects on territory: {total}, Total number of pages: {total_pages}")
-
-    urls = [
-        f"/territory/{territory_id}/physical_objects_with_geometry?page={i}&page_size={page_size}"
-        for i in range(1, total_pages + 1)
-    ]
-
-    semaphore = asyncio.Semaphore(5)
-
-    async def fetch_page_with_sem(url: str) -> dict:
-        async with semaphore:
-            data = await urban_db_api.get(url)
-            logger.info(f"Page {url} has been loaded")
-            return data
-
-    tasks = [fetch_page_with_sem(url) for url in urls]
-    pages = await asyncio.gather(*tasks)
-
+    base_url = f"/api/v2/territory/{territory_id}/physical_objects_with_geometry"
+    cursor = None
     results = []
-    for page in pages:
-        results.extend(page.get("results", []))
+    semaphore = asyncio.Semaphore(5)
+    total_objects = 0
+    total_pages = 0
+    first_request = True
+
+    async def fetch_with_cursor(url):
+        async with semaphore:
+            response = await urban_db_api.get(url)
+            logger.info(f"Loaded batch from {url}")
+            return response
+
+    while True:
+        url = f"{base_url}?include_child_territories=true&cities_only=false&ordering=asc&page_size={page_size}"
+        if cursor:
+            url += f"&cursor={cursor}"
+
+        response = await fetch_with_cursor(url)
+
+        if first_request:
+            total_objects = response.get("count", 0)
+            total_pages = ceil(total_objects / page_size)
+            logger.info(f"Total objects: {total_objects}, Total pages: {total_pages}")
+            first_request = False
+
+        results.extend(response.get("results", []))
+
+        cursor = response.get("next")
+        if not cursor:
+            break
+        else:
+            cursor_param = cursor.split("cursor=")[-1]
+            cursor = cursor_param
+
+    logger.info(f"Final number of loaded objects: {len(results)}")
     return results
+
 
