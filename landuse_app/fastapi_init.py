@@ -1,9 +1,15 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.docs import get_swagger_ui_html
+from loguru import logger
 
 from landuse_app import config
 from landuse_app.handlers import list_of_routes
+
+logger.add(
+    f'{config.get("LOG_FILE")}.log', colorize=False, backtrace=True, diagnose=True
+)
+
 
 
 def bind_routes(application: FastAPI, prefix: str) -> None:

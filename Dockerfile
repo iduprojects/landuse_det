@@ -18,4 +18,5 @@ WORKDIR /app
 COPY . /app
 
 # During debugging, this entry point will be overridden. For more information, please refer to https://aka.ms/vscode-docker-python-debug
-CMD ["gunicorn", "--bind", "0.0.0.0:80", "-k", "uvicorn.workers.UvicornWorker", "landuse_app.fastapi_init:app"]
+CMD ["gunicorn", "--bind", "0.0.0.0:80", "-k", "uvicorn.workers.UvicornWorker", "--timeout", "1200", "--workers", "1", "landuse_app.fastapi_init:app"]
+
