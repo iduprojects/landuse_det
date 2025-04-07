@@ -370,7 +370,7 @@ async def get_physical_objects_from_territory_parallel(territory_id: int, page_s
     base_url = f"/api/v2/territory/{territory_id}/physical_objects_with_geometry"
     cursor = None
     results = []
-    semaphore = asyncio.Semaphore(5)
+    semaphore = asyncio.Semaphore(1)
     total_objects = 0
     total_pages = 0
     first_request = True
@@ -403,7 +403,12 @@ async def get_physical_objects_from_territory_parallel(territory_id: int, page_s
             cursor_param = cursor.split("cursor=")[-1]
             cursor = cursor_param
 
+        if len(results) < 1:
+            raise http_exception(404, "No physical objects found for the given territory ID.", territory_id)
+
     logger.info(f"Final number of loaded objects: {len(results)}")
+    if len(results) < 1:
+        logger.error("The number of physical objects returned is 0")
     return results
 
 

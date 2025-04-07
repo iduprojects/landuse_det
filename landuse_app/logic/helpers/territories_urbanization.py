@@ -144,13 +144,18 @@ async def extract_physical_objects_from_territory(territory_id: int) -> dict[str
     for obj in raw_objects:
         parsed_objects = parse_physical_object(obj)
         all_data.extend(parsed_objects)
+    if not all_data:
+        raise http_exception(404, "No physical objects found for territory ID",  territory_id)
 
     logger.success("Physical objects are loaded, creating the  GeoDataFrame")
     all_data_df = pd.DataFrame(all_data)
     all_data_gdf = gpd.GeoDataFrame(all_data_df, geometry="geometry", crs="EPSG:4326")
     all_data_gdf = all_data_gdf.drop_duplicates(subset='physical_object_id')
+    all_data_gdf = all_data_gdf.dropna(subset=['geometry'])
     all_data_gdf = all_data_gdf[all_data_gdf.geometry.type.isin(['Polygon', 'MultiPolygon'])]
-
+    all_data_gdf = all_data_gdf[all_data_gdf.geometry.is_valid]
+    if len(all_data_gdf) < 1:
+        raise http_exception(404, "No polygonal physical objects found for territory ID",  territory_id)
     local_crs = all_data_gdf.estimate_utm_crs()
 
     water_objects_gdf = all_data_gdf[
