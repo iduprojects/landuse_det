@@ -1,7 +1,7 @@
 from fastapi import HTTPException
 
 
-def http_exception(status_code: int, msg: str, _input) -> HTTPException:
+def http_exception(status_code: int, msg: str, _input=None) -> HTTPException:
     return HTTPException(
         status_code=status_code,
         detail={
@@ -9,3 +9,4 @@ def http_exception(status_code: int, msg: str, _input) -> HTTPException:
             "input": _input
         }
     )
+

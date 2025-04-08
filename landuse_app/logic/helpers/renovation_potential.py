@@ -4,7 +4,7 @@ import geopandas as gpd
 import numpy as np
 import pandas as pd
 from loguru import logger
-from shapely import Polygon
+from shapely import Polygon, make_valid
 from shapely.geometry import shape
 import asyncio
 from pandarallel import pandarallel
@@ -630,13 +630,16 @@ async def get_renovation_potential(
     landuse_polygons_ren_pot = await analyze_geojson_for_renovation_potential(landuse_polygons, profile_for_analysis)
     logger.info("Потенциал для реновации рассчитан")
 
-    zones = landuse_polygons_ren_pot.to_crs(utm_crs)
+    zones_utm_crs = landuse_polygons_ren_pot.estimate_utm_crs()
+    zones = landuse_polygons_ren_pot.to_crs(zones_utm_crs)
     non_renovated = zones[pd.isna(zones['Потенциал'])]
-    buffered_geometries = non_renovated.buffer(300)
+    non_renovated["geometry"] = await asyncio.to_thread(
+        lambda: non_renovated["geometry"].apply(make_valid)
+    )
+    non_renovated = non_renovated[non_renovated.is_valid]
+    buffered_geometries = non_renovated.buffer(300).apply(lambda geom: geom.buffer(0))
     buffered_gdf = gpd.GeoDataFrame(geometry=buffered_geometries, crs=zones.crs)
-    renovated = zones[
-        (zones['Потенциал'] == 'Подлежащие реновации')
-        ]
+    renovated = zones[zones['Потенциал'] == 'Подлежащие реновации']
 
     joined = gpd.sjoin(
         renovated,
@@ -644,28 +647,31 @@ async def get_renovation_potential(
         how='inner',
         predicate='intersects'
     )
+
     if joined.empty:
-        logger.info("No intersections between buffers and polygons were found,"
-                    " returning polygons without intersections")
+        logger.info(
+            "No intersections between buffers and polygons were found, returning polygons without intersections")
         landuse_polygons_ren_pot = zones.to_crs(epsg=4326)
-
         result_json = json.loads(landuse_polygons_ren_pot.to_json())
-        caching_service.save_with_cleanup(
+        await caching_service.save_with_cleanup(
             result_json, cache_name,
-            {"profile": profile_key,
-             "source": source_key})
-
+            {"profile": profile_key, "source": source_key}
+        )
         return landuse_polygons_ren_pot
     else:
+        def safe_intersection_area(row):
+            geom1 = row.geometry.buffer(0)
+            geom2 = buffered_gdf.loc[row.index_right].geometry.buffer(0)
+            inter = geom1.intersection(geom2)
+            return inter.area if not inter.is_empty else 0
+
         try:
-            joined['intersection_area'] = joined.apply(
-                lambda row: row.geometry.intersection(
-                    buffered_gdf.loc[row.index_right].geometry
-                ).area if not row.geometry.intersection(buffered_gdf.loc[row.index_right].geometry).is_empty else 0,
-                axis=1
+            joined['intersection_area'] = await asyncio.to_thread(
+                lambda: joined.apply(safe_intersection_area, axis=1)
             )
         except Exception as e:
-            raise http_exception(500, "Error while searching for intersections between buffers and polygons", e)
+            logger.error("Ошибка при вычислении пересечений: %s", e)
+            raise http_exception(500, "Error while searching for intersections between buffers and polygons") from e
 
     grouped = joined.groupby(joined.index)['intersection_area'].sum()
     final_overlap_ratio = grouped / renovated.loc[grouped.index].geometry.area
@@ -674,10 +680,10 @@ async def get_renovation_potential(
     landuse_polygons_ren_pot = zones.to_crs(epsg=4326)
 
     result_json = json.loads(landuse_polygons_ren_pot.to_json())
-    caching_service.save_with_cleanup(
+    await caching_service.save_with_cleanup(
         result_json, cache_name,
-        {"profile": profile_key,
-         "source": source_key})
+        {"profile": profile_key, "source": source_key}
+    )
 
     return landuse_polygons_ren_pot
 
