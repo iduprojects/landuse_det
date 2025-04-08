@@ -111,6 +111,7 @@ async def extract_physical_objects(project_id: int, is_context: bool, scenario_i
                             "service_id": service_id,
                             "service_name": service_name,
                             "is_capacity_real": is_capacity_real,
+                            "object_type": service_name,
                         })
                         all_data.append(object_data.copy())
                     continue
@@ -680,10 +681,10 @@ async def get_renovation_potential(
     landuse_polygons_ren_pot = zones.to_crs(epsg=4326)
 
     result_json = json.loads(landuse_polygons_ren_pot.to_json())
-    await caching_service.save_with_cleanup(
+    caching_service.save_with_cleanup(
         result_json, cache_name,
-        {"profile": profile_key, "source": source_key}
-    )
+        {"profile": profile_key,
+         "source": source_key})
 
     return landuse_polygons_ren_pot
 
