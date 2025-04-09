@@ -1,5 +1,4 @@
 import asyncio
-from math import ceil
 
 import pandas as pd
 from loguru import logger
@@ -316,6 +315,7 @@ async def get_physical_objects_from_territory(territory_id: int) -> dict:
 
     return response
 
+
 async def check_indicator_exists(territory_id: int) -> dict | None:
     """
     Attempts to retrieve an existing indicator from the database.
@@ -325,7 +325,7 @@ async def check_indicator_exists(territory_id: int) -> dict | None:
       - None: If the response status is 404 (i.e., the indicator does not exist).
     """
     endpoint = (
-        "/api/v1/indicator_value"
+        f"/api/v1/territory/{territory_id}/indicator_values"
         "?indicator_id=16"
         f"&territory_id={territory_id}"
         "&date_type=year"
@@ -334,7 +334,10 @@ async def check_indicator_exists(territory_id: int) -> dict | None:
         "&information_source=landuse_det"
     )
     data = await urban_db_api.get(endpoint, ignore_404=True)
+    if not data:
+        return None
     return data
+
 
 async def put_indicator_value(indicator_data: dict) -> dict:
     """
@@ -364,51 +367,46 @@ async def put_indicator_value(indicator_data: dict) -> dict:
 
 async def get_physical_objects_from_territory_parallel(territory_id: int, page_size: int = int(config.get("PAGE_SIZE"))) -> list[dict]:
     """
-    Fetch physical objects using cursor-based pagination.
-    Logs total pages count based on API 'count' field.
+    Fetch physical objects from a territory in parallel with a concurrency limit of 5.
+
+    This asynchronous function retrieves all physical objects for a given territory using the
+    endpoint /territory/{territory_id}/physical_objects_with_geometry. It paginates through the results
+    based on the provided page_size and uses the get() method from urban_db_api
+    to make API requests. The function limits concurrent requests to 5.
+
+    Parameters:
+        territory_id (int): The unique identifier of the territory.
+        page_size (int, optional): The number of objects to request per page (default is 5000).
+
+    Returns:
+        list[dict]: A list of dictionaries, where each dictionary represents a physical object.
     """
-    base_url = f"/api/v2/territory/{territory_id}/physical_objects_with_geometry"
-    cursor = None
-    results = []
-    semaphore = asyncio.Semaphore(1)
-    total_objects = 0
-    total_pages = 0
-    first_request = True
+    endpoint = f"/api/v1/territory/{territory_id}/physical_objects_with_geometry?page=1&page_size={page_size}"
+    initial_response = await urban_db_api.get(endpoint)
+    total = initial_response.get("count", 0)
+    total_pages = (total // page_size) + (1 if total % page_size else 0)
+    logger.info(f"Total physical objects on territory: {total}, Total number of pages: {total_pages}")
 
-    async def fetch_with_cursor(url):
+    urls = [
+        f"/api/v1/territory/{territory_id}/physical_objects_with_geometry?page={i}&page_size={page_size}"
+        for i in range(1, total_pages + 1)
+    ]
+
+    semaphore = asyncio.Semaphore(5)
+
+    async def fetch_page_with_sem(url: str) -> dict:
         async with semaphore:
-            response = await urban_db_api.get(url)
-            logger.info(f"Loaded batch from {url}")
-            return response
+            data = await urban_db_api.get(url)
+            logger.info(f"Page {url} has been loaded")
+            return data
 
-    while True:
-        url = f"{base_url}?include_child_territories=true&cities_only=false&ordering=asc&page_size={page_size}"
-        if cursor:
-            url += f"&cursor={cursor}"
+    tasks = [fetch_page_with_sem(url) for url in urls]
+    pages = await asyncio.gather(*tasks)
 
-        response = await fetch_with_cursor(url)
-
-        if first_request:
-            total_objects = response.get("count", 0)
-            total_pages = ceil(total_objects / page_size)
-            logger.info(f"Total objects: {total_objects}, Total pages: {total_pages}")
-            first_request = False
-
-        results.extend(response.get("results", []))
-
-        cursor = response.get("next")
-        if not cursor:
-            break
-        else:
-            cursor_param = cursor.split("cursor=")[-1]
-            cursor = cursor_param
-
-        if len(results) < 1:
-            raise http_exception(404, "No physical objects found for the given territory ID.", territory_id)
-
-    logger.info(f"Final number of loaded objects: {len(results)}")
-    if len(results) < 1:
-        logger.error("The number of physical objects returned is 0")
+    results = []
+    for page in pages:
+        results.extend(page.get("results", []))
     return results
+
 
 
