@@ -4,7 +4,7 @@ import geopandas as gpd
 import numpy as np
 import pandas as pd
 from loguru import logger
-from shapely import Polygon, make_valid
+from shapely import Polygon, MultiPolygon
 from shapely.geometry import shape
 import asyncio
 from pandarallel import pandarallel
@@ -115,26 +115,27 @@ async def extract_physical_objects(project_id: int, is_context: bool, scenario_i
                         })
                         all_data.append(object_data.copy())
                     continue
-
                 object_data.update({"category": "non_residential"})
 
             elif physical_object.get("physical_object_type", {}).get("name") == "Рекреационная зона":
                 services = properties.get("services", [])
                 park_type = None
+                other_service_type = None
                 for service in services:
-                    if service.get("service_type", {}).get("name") == "Парк":
+                    service_name = service.get("service_type", {}).get("name")
+                    if service_name == "Парк":
                         park_type = "Парк"
-
+                    else:
+                        if not other_service_type and service_name:
+                            other_service_type = service_name
                 object_data.update({
                     "category": "recreational",
-                    "object_type": park_type or "Рекреационная зона",
+                    "object_type": park_type or other_service_type or "Рекреационная зона",
                 })
                 all_data.append(object_data)
                 continue
-
             else:
                 object_data.update({"category": "other"})
-
             all_data.append(object_data)
 
     logger.info("Физические объекты загружены")
@@ -292,7 +293,8 @@ def calculate_profiled_building_area(
         The percentage of the zone's area covered by profiled buildings.
         If no buildings match the profile or the zone's area is zero, returns 0.
     """
-    if not hasattr(zone, "geometry") or not isinstance(zone.geometry, Polygon) or zone.geometry.area == 0:
+    if not hasattr(zone, "geometry") or not isinstance(zone.geometry,
+                                                       (Polygon, MultiPolygon)) or zone.geometry.area == 0:
         return 0
 
     zone_area = zone.geometry.area
@@ -355,20 +357,23 @@ async def assign_development_type(landuse_polygons: gpd.GeoDataFrame) -> gpd.Geo
         (landuse_polygons["landuse_zone"] == "Residential") & (landuse_polygons["Среднеэтажная"] > 40.00),
         (landuse_polygons["landuse_zone"] == "Special"),
 
-        (landuse_polygons["Процент профильных объектов"].isna()) | (landuse_polygons["Любые здания /на зону"] == 0.0),
+        (landuse_polygons["Процент профильных объектов"].isna()),
+        (landuse_polygons["Процент профильных объектов"] == 0.0),
         (landuse_polygons["Процент профильных объектов"] < 10.00),
         (landuse_polygons["Процент профильных объектов"] < 25.00),
         (landuse_polygons["Процент профильных объектов"] < 75.00),
         (landuse_polygons["Процент профильных объектов"] < 90.00),
+
         (landuse_polygons["Процент профильных объектов"] >= 90.00),
     ]
 
     urbanization_levels = [
-        "Высоко урбанизированная территория",  # Residential + Многоэтажная > 30%
-        "Высоко урбанизированная территория",  # Residential + Среднеэтажная > 40%
-        "Высоко урбанизированная территория",  # Special
+        "Высоко урбанизированная территория",  # для Residential с Многоэтажной > 30%
+        "Высоко урбанизированная территория",  # для Residential с Среднеэтажной > 40%
+        "Высоко урбанизированная территория",  # для Special
 
-        "Мало урбанизированная территория",  # No data or 0%
+        "Мало урбанизированная территория",  # данных нет или 0
+        "Мало урбанизированная территория"
         "Мало урбанизированная территория",  # <10%
         "Слабо урбанизированная территория",  # <25%
         "Средне урбанизированная территория",  # <75%
@@ -617,8 +622,6 @@ async def get_renovation_potential(
     landuse_polygons["Любые здания /на зону"] = 0.0
     logger.info("Функциональные зоны и физические объекты отфильтрованы")
 
-    physical_objects_sindex = physical_objects.sindex
-
     landuse_polygons = await process_zones_with_bulk_update(landuse_polygons, physical_objects,
                                                             zone_mapping)
     logger.info("Проценты зданий посчитаны")
@@ -631,16 +634,23 @@ async def get_renovation_potential(
     landuse_polygons_ren_pot = await analyze_geojson_for_renovation_potential(landuse_polygons, profile_for_analysis)
     logger.info("Потенциал для реновации рассчитан")
 
-    zones_utm_crs = landuse_polygons_ren_pot.estimate_utm_crs()
-    zones = landuse_polygons_ren_pot.to_crs(zones_utm_crs)
+    zones = landuse_polygons_ren_pot.to_crs(utm_crs)
+
+    oop_objects = physical_objects[physical_objects["object_type"] == "ООПТ"]
+    if not oop_objects.empty:
+        oop_objects = oop_objects.to_crs(zones.crs)
+        oop_join = gpd.sjoin(zones, oop_objects, how="inner", predicate="intersects")
+        if not oop_join.empty:
+            oop_zone_ids = oop_join["functional_zone_id"].unique()
+            zones.loc[zones["functional_zone_id"].isin(oop_zone_ids), "Потенциал"] = "Не подлежащие реновации"
+            zones.loc[zones["functional_zone_id"].isin(oop_zone_ids), "Процент урбанизации"] = "Высоко урбанизированная территория"
+
     non_renovated = zones[pd.isna(zones['Потенциал'])]
-    non_renovated["geometry"] = await asyncio.to_thread(
-        lambda: non_renovated["geometry"].apply(make_valid)
-    )
-    non_renovated = non_renovated[non_renovated.is_valid]
-    buffered_geometries = non_renovated.buffer(300).apply(lambda geom: geom.buffer(0))
+    buffered_geometries = non_renovated.buffer(300)
     buffered_gdf = gpd.GeoDataFrame(geometry=buffered_geometries, crs=zones.crs)
-    renovated = zones[zones['Потенциал'] == 'Подлежащие реновации']
+    renovated = zones[
+        (zones['Потенциал'] == 'Подлежащие реновации')
+        ]
 
     joined = gpd.sjoin(
         renovated,
@@ -648,31 +658,28 @@ async def get_renovation_potential(
         how='inner',
         predicate='intersects'
     )
-
     if joined.empty:
-        logger.info(
-            "No intersections between buffers and polygons were found, returning polygons without intersections")
+        logger.info("No intersections between buffers and polygons were found,"
+                    " returning polygons without intersections")
         landuse_polygons_ren_pot = zones.to_crs(epsg=4326)
+
         result_json = json.loads(landuse_polygons_ren_pot.to_json())
-        await caching_service.save_with_cleanup(
+        caching_service.save_with_cleanup(
             result_json, cache_name,
-            {"profile": profile_key, "source": source_key}
-        )
+            {"profile": profile_key,
+             "source": source_key})
+
         return landuse_polygons_ren_pot
     else:
-        def safe_intersection_area(row):
-            geom1 = row.geometry.buffer(0)
-            geom2 = buffered_gdf.loc[row.index_right].geometry.buffer(0)
-            inter = geom1.intersection(geom2)
-            return inter.area if not inter.is_empty else 0
-
         try:
-            joined['intersection_area'] = await asyncio.to_thread(
-                lambda: joined.apply(safe_intersection_area, axis=1)
+            joined['intersection_area'] = joined.apply(
+                lambda row: row.geometry.intersection(
+                    buffered_gdf.loc[row.index_right].geometry
+                ).area if not row.geometry.intersection(buffered_gdf.loc[row.index_right].geometry).is_empty else 0,
+                axis=1
             )
         except Exception as e:
-            logger.error("Ошибка при вычислении пересечений: %s", e)
-            raise http_exception(500, "Error while searching for intersections between buffers and polygons") from e
+            raise http_exception(500, "Error while searching for intersections between buffers and polygons", e)
 
     grouped = joined.groupby(joined.index)['intersection_area'].sum()
     final_overlap_ratio = grouped / renovated.loc[grouped.index].geometry.area
