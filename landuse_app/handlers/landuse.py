@@ -214,7 +214,7 @@ async def calculate_area_indicator(
     return territory_area
 
 @indicators_router.post(
-    "/indicator/{territory_id}/services_count_indicator")
+    "/indicators/{territory_id}/services_count_indicator")
 async def services_count_indicator(
     territory_id: int = Path(description="The unique identifier of the territory."),
     indicator_id: int = Query(description="The unique identifier of the indicator."),
