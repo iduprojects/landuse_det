@@ -202,15 +202,26 @@ async def get_territory_urbanization_level(
     )
 @indicators_router.post(
     "/indicators/{territory_id}/calculate_area_indicator",
-    response_model=dict)
-async def calculate_area_indicator(territory_id: int = Path(..., description="The unique identifier of the territory."),) -> dict:
-    territory_area = await IndicatorsService.calculate_territory_area(territory_id)
+    response_model=dict | list[dict])
+async def calculate_area_indicator(
+        territory_id: int = Path(..., description="The unique identifier of the territory."),
+        force_recalculate: bool = Query(
+        False,
+        description="If True, forces recalculation even if the indicator already exists."
+        )
+        ) -> dict | list[dict]:
+    territory_area = await IndicatorsService.calculate_territory_area(territory_id, force_recalculate=force_recalculate)
     return territory_area
 
 @indicators_router.post(
     "/indicator/{territory_id}/services_count_indicator")
 async def services_count_indicator(
     territory_id: int = Path(description="The unique identifier of the territory."),
-    indicator_id: int = Query(None, description="The unique identifier of the indicator."),) -> dict:
-    services_count = await IndicatorsService.calculate_service_count(territory_id, indicator_id)
+    indicator_id: int = Query(description="The unique identifier of the indicator."),
+    force_recalculate: bool = Query(
+        False,
+        description="If True, forces recalculation even if the indicator already exists."
+        )
+        ) -> dict | list[dict]:
+    services_count = await IndicatorsService.calculate_service_count(territory_id, indicator_id, force_recalculate=force_recalculate)
     return services_count

@@ -1,19 +1,22 @@
 """Service created for calculations related to indicators"""
-from typing import Any
 
+from loguru import logger
 from landuse_app.logic.helpers.urban_api_access import get_territory_boundaries, put_indicator_value, get_service_count, \
-    get_service_type_id_through_indicator
-import pandas as pd
-import requests
+    get_service_type_id_through_indicator, check_indicator_exists
 import geopandas as gpd
 from shapely.geometry import shape
 import math
-import time
 
 
 class IndicatorsService:
     @staticmethod
-    async def calculate_territory_area(territory_id: int) -> dict:
+    async def calculate_territory_area(territory_id: int, force_recalculate: bool = False) -> dict:
+        indicator_id = 4
+        if not force_recalculate:
+            existing_indicator = await check_indicator_exists(territory_id, indicator_id)
+            if existing_indicator is not None:
+                logger.info(f"Indicator already exists in Urban DB, returning existing value")
+                return existing_indicator
         territory_data = await get_territory_boundaries(territory_id)
         # territory_data = response.json()
         geometry = shape(territory_data["geometry"])
@@ -24,7 +27,7 @@ class IndicatorsService:
         gdf_utm = gdf.to_crs(gdf.estimate_utm_crs())
         area_sq_km = math.ceil(gdf_utm.area.sum() / 1e6)
         payload = {
-            "indicator_id": 4,
+            "indicator_id": indicator_id,
             "territory_id": territory_data["territory_id"],
             "date_type": "year",
             "date_value": "2025-01-01",
@@ -36,7 +39,12 @@ class IndicatorsService:
         return computed_indicator
 
     @staticmethod
-    async def calculate_service_count(territory_id: int, indicator_id: int) -> dict:
+    async def calculate_service_count(territory_id: int, indicator_id: int, force_recalculate: bool = False) -> dict:
+        if not force_recalculate:
+            existing_indicator = await check_indicator_exists(territory_id, indicator_id)
+            if existing_indicator is not None:
+                logger.info(f"Indicator already exists in Urban DB, returning existing value")
+                return existing_indicator
         service_id = await get_service_type_id_through_indicator(indicator_id)
         services_count = await get_service_count(territory_id, service_id)
         # data = services_count.json()

@@ -12,7 +12,7 @@ from storage.caching import caching_service
 from .renovation_potential import analyze_geojson_for_renovation_potential, process_zones_with_bulk_update, \
     assign_development_type
 from .urban_api_access import get_functional_zones_territory_id, get_functional_zone_sources_territory_id, \
-    check_indicator_exists, put_indicator_value, get_physical_objects_from_territory_parallel
+    check_urbanization_indicator_exists, put_indicator_value, get_physical_objects_from_territory_parallel
 from ..constants.constants import zone_mapping
 from ...exceptions.http_exception_wrapper import http_exception
 
@@ -462,7 +462,7 @@ async def get_territory(territory_id: int, source: str = None, force_recalculate
     """
     logger.info(f"Started calculation for territory {territory_id}")
     if not force_recalculate:
-        existing_indicator = await check_indicator_exists(territory_id)
+        existing_indicator = await check_urbanization_indicator_exists(territory_id)
         if existing_indicator is not None:
             logger.info(f"Indicator already exists in Urban DB, returning existing value")
             return existing_indicator

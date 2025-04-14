@@ -316,9 +316,9 @@ async def get_physical_objects_from_territory(territory_id: int) -> dict:
     return response
 
 
-async def check_indicator_exists(territory_id: int) -> dict | None:
+async def check_urbanization_indicator_exists(territory_id: int) -> dict | None:
     """
-    Attempts to retrieve an existing indicator from the database.
+    Attempts to retrieve an existing urbanization indicator from the database.
 
     Returns:
       - dict: The indicator JSON if the response status is 200.
@@ -332,6 +332,27 @@ async def check_indicator_exists(territory_id: int) -> dict | None:
         "&date_value=2025-01-01"
         "&value_type=forecast"
         "&information_source=landuse_det"
+    )
+    data = await urban_db_api.get(endpoint, ignore_404=True)
+    if not data:
+        return None
+    return data
+
+async def check_indicator_exists(territory_id: int, indicator_id: int) -> dict | None:
+    """
+    Attempts to retrieve an existing indicator from the database.
+
+    Returns:
+      - dict: The indicator JSON if the response status is 200.
+      - None: If the response status is 404 (i.e., the indicator does not exist).
+    """
+    endpoint = (
+        f"/api/v1/territory/{territory_id}/indicator_values"
+        f"?indicator_ids={indicator_id}"
+        "&date_type=year"
+        "&date_value=2025-01-01"
+        "&value_type=real"
+        "&information_source=modeled"
     )
     data = await urban_db_api.get(endpoint, ignore_404=True)
     if not data:
@@ -421,6 +442,8 @@ async def get_service_type_id_through_indicator(indicator_id: int) -> int:
     service_type_id = response.get("service_type", 0)
     if isinstance(service_type_id, dict):
         service_type_id = service_type_id.get("id", 0)
+    if not service_type_id:
+        raise http_exception(404, "No assigned service found for given indicator ID:", indicator_id)
     return service_type_id
 
 async def get_service_count(territory_id: int, service_type_id: int) -> int:
