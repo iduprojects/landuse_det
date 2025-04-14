@@ -4,8 +4,10 @@ from fastapi import Path, Query
 from ..exceptions.http_exception_wrapper import http_exception
 from ..logic import landuse_service
 from ..logic.constants.constants import VALID_SOURCES
+from ..logic.helpers import IndicatorsService
 from ..schemas import GeoJSON
-from .routers import renovation_router, urbanization_router, landuse_percentages_router, territories_urbanization_router
+from .routers import renovation_router, urbanization_router, landuse_percentages_router, \
+    territories_urbanization_router, indicators_router
 
 
 @renovation_router.get(
@@ -121,9 +123,9 @@ async def get_project_landuse_parts(
         )
     return await landuse_service.get_project_landuse_parts(scenario_id, source=source)
 
-@territories_urbanization_router.post(
-    "/territory/{territory_id}/calculate_territory_urbanization",
-    response_model=dict,
+@indicators_router.post(
+    "/indicators/{territory_id}/calculate_territory_urbanization",
+    response_model=dict | list[dict],
     responses={
         200: {
             "description": "Successful Response",
@@ -172,7 +174,7 @@ async def get_territory_urbanization_level(
         False,
         description="If True, forces recalculation even if the indicator already exists."
     )
-) -> dict:
+) -> dict | list[dict]:
     """
     Calculate and store the urbanization percentage for a given territory in Urban DB.
 
@@ -198,6 +200,17 @@ async def get_territory_urbanization_level(
         source=source,
         force_recalculate=force_recalculate
     )
+@indicators_router.post(
+    "/indicators/{territory_id}/calculate_area_indicator",
+    response_model=dict)
+async def calculate_area_indicator(territory_id: int = Path(..., description="The unique identifier of the territory."),) -> dict:
+    territory_area = await IndicatorsService.calculate_territory_area(territory_id)
+    return territory_area
 
-
-
+@indicators_router.post(
+    "/indicator/{territory_id}/services_count_indicator")
+async def services_count_indicator(
+    territory_id: int = Path(description="The unique identifier of the territory."),
+    indicator_id: int = Query(None, description="The unique identifier of the indicator."),) -> dict:
+    services_count = await IndicatorsService.calculate_service_count(territory_id, indicator_id)
+    return services_count

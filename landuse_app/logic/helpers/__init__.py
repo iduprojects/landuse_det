@@ -11,6 +11,8 @@ from .urban_api_access import (
     get_projects_territory,
 )
 
+from .indicators_service import IndicatorsService
+
 __all__ = [
     "get_projects_renovation_potential",
     "get_projects_context_renovation_potential",
@@ -18,4 +20,5 @@ __all__ = [
     "get_projects_context_urbanization_level",
     "get_projects_territory",
     "get_projects_base_scenario_id",
+    "IndicatorsService"
 ]

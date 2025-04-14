@@ -408,5 +408,29 @@ async def get_physical_objects_from_territory_parallel(territory_id: int, page_s
         results.extend(page.get("results", []))
     return results
 
+async def get_territory_boundaries(territory_id: int) -> dict:
+    endpoint = f"/api/v1/territory/{territory_id}"
+    response = await urban_db_api.get(endpoint)
+    if not response:
+        raise http_exception(404, "No boundaries found for given territory ID:", territory_id)
+    return response
 
+async def get_service_type_id_through_indicator(indicator_id: int) -> int:
+    endpoint = f"/api/v1/indicators/{indicator_id}"
+    response = await urban_db_api.get(endpoint)
+    service_type_id = response.get("service_type", 0)
+    if isinstance(service_type_id, dict):
+        service_type_id = service_type_id.get("id", 0)
+    return service_type_id
 
+async def get_service_count(territory_id: int, service_type_id: int) -> int:
+    endpoint = f"/api/v1/territory/{territory_id}/services"
+    params = {
+        "service_type_id": service_type_id,
+        "page_size": 10
+    }
+    response = await urban_db_api.get(endpoint, params=params)
+    if not response:
+        raise http_exception(404, "No services found for given territory ID:", territory_id)
+    number_of_services = response.get("count", 0)
+    return number_of_services
