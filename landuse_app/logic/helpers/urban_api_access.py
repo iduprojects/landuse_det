@@ -19,6 +19,9 @@ async def get_projects_territory(project_id: int) -> dict:
     dict: Territory information.
     """
     endpoint = f"/api/v1/projects/{project_id}/territory"
+    headers = {
+        "Authorization": f"Bearer {config.get("ACCESS_TOKEN")}"""
+    }
     response = await urban_db_api.get(endpoint)
 
     if not response:
@@ -429,12 +432,14 @@ async def get_physical_objects_from_territory_parallel(territory_id: int, page_s
         results.extend(page.get("results", []))
     return results
 
+
 async def get_territory_boundaries(territory_id: int) -> dict:
     endpoint = f"/api/v1/territory/{territory_id}"
     response = await urban_db_api.get(endpoint)
     if not response:
         raise http_exception(404, "No boundaries found for given territory ID:", territory_id)
     return response
+
 
 async def get_service_type_id_through_indicator(indicator_id: int) -> int:
     endpoint = f"/api/v1/indicators/{indicator_id}"
@@ -445,6 +450,7 @@ async def get_service_type_id_through_indicator(indicator_id: int) -> int:
     if not service_type_id:
         raise http_exception(404, "No assigned service found for given indicator ID:", indicator_id)
     return service_type_id
+
 
 async def get_service_count(territory_id: int, service_type_id: int) -> int:
     endpoint = f"/api/v1/territory/{territory_id}/services"
@@ -457,3 +463,40 @@ async def get_service_count(territory_id: int, service_type_id: int) -> int:
         raise http_exception(404, "No services found for given territory ID:", territory_id)
     number_of_services = response.get("count", 0)
     return number_of_services
+
+
+async def check_project_indicator_exist(project_id: int, indicator_id: int) -> dict | None:
+    """
+    Attempts to retrieve an existing indicator from the database.
+
+    Returns:
+      - dict: The indicator JSON if the response status is 200.
+      - None: If the response status is 404 (i.e., the indicator does not exist).
+    """
+    scenario_id = await get_projects_base_scenario_id(project_id)
+    endpoint = (
+        f"/api/v1/scenarios/{scenario_id}/indicators_values"
+        f"?indicator_ids={indicator_id}"
+    )
+    data = await urban_db_api.get(endpoint, ignore_404=True)
+    if not data:
+        return None
+    return data
+
+
+async def put_project_indicator(
+    scenario_id: int,
+    indicator_data: dict,
+    *,
+    use_token: bool = True,
+    override_token: str | None = None,
+    extra_headers: dict[str, str] | None = None
+) -> dict:
+    endpoint = f"/api/v1/scenarios/{scenario_id}/indicators_values"
+    return await urban_db_api.put(
+        endpoint,
+        data=indicator_data,
+        use_token=use_token,
+        override_token=override_token,
+        extra_headers=extra_headers
+    )
