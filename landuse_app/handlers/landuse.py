@@ -204,7 +204,8 @@ async def get_territory_urbanization_level(
 
 @indicators_router.post(
     "/indicators/{territory_id}/calculate_area_indicator",
-    response_model=dict | list[dict])
+    response_model=dict | list[dict],
+    description="Calculate and store the area indicator for a given territory in Urban DB.")
 async def calculate_area_indicator(
         territory_id: int = Path(..., description="The unique identifier of the territory."),
         force_recalculate: bool = Query(
@@ -217,7 +218,8 @@ async def calculate_area_indicator(
 
 
 @indicators_router.post(
-    "/indicators/{territory_id}/services_count_indicator")
+    "/indicators/{territory_id}/services_count_indicator",
+    description="Calculate the number of services indicators for a given territory.")
 async def services_count_indicator(
     territory_id: int = Path(description="The unique identifier of the territory."),
     indicator_id: int = Query(description="The unique identifier of the indicator."),
@@ -231,7 +233,8 @@ async def services_count_indicator(
 
 
 @indicators_router.post(
-    "/indicators/{project_id}/calculate_project_area_indicator")
+    "/indicators/{project_id}/calculate_project_area_indicator",
+    description='Calculate and store the area indicator for a given project in Urban DB.')
 async def calculate_project_area_indicator(
     project_id: int = Path(description="The unique identifier of the territory."),
     force_recalculate: bool = Query(
