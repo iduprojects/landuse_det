@@ -13,3 +13,4 @@ aiohttp~=3.11.9
 PyYAML~=6.0.2
 python-dotenv~=1.0.1
 pyproj~=3.7.0
+pyjwt~=2.10.1
