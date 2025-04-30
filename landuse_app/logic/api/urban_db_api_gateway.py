@@ -14,6 +14,7 @@ class AuthService:
     def __init__(self, auth_base_url: str):
         self.introspect_url = f"{auth_base_url}/introspect/"
         self.refresh_url = f"{auth_base_url}/refresh_token/"
+        self.token_url = f"{auth_base_url}/token/"
 
     async def _introspect(self, token: str) -> bool:
         async with aiohttp.ClientSession() as sess:
@@ -28,8 +29,7 @@ class AuthService:
             }
             async with sess.post(self.introspect_url, data=payload, headers=headers) as resp:
                 if resp.status == 200:
-                    result = await resp.json()
-                    return result.get("active", False)
+                    return (await resp.json()).get("active", False)
                 logger.warning("Introspect failed %s: %s", resp.status, await resp.text())
                 return False
 
@@ -45,40 +45,80 @@ class AuthService:
                 "Content-Type": "application/x-www-form-urlencoded"
             }
             async with sess.post(self.refresh_url, data=payload, headers=headers) as resp:
+                text = await resp.text()
                 if resp.status != 200:
-                    text = await resp.text()
                     logger.error("Refresh token failed %s: %s", resp.status, text)
                     raise HTTPException(401, f"Cannot refresh token: {text}")
                 return await resp.json()
 
+    async def _password_grant(self) -> dict:
+        """
+        Request to /token/ using password-flow, using login/password from config
+        """
+        username = config.get("AUTH_USERNAME")
+        password = config.get("AUTH_PASSWORD")
+        if not username or not password:
+            raise HTTPException(500, "Missing AUTH_USERNAME/AUTH_PASSWORD in config")
+
+        async with aiohttp.ClientSession() as sess:
+            payload = {
+                "grant_type": "password",
+                "username": username,
+                "password": password,
+                "client_id": "unknown_client"
+            }
+            headers = {
+                "accept": "application/json",
+                "Content-Type": "application/x-www-form-urlencoded"
+            }
+            async with sess.post(self.token_url, data=payload, headers=headers) as resp:
+                text = await resp.text()
+                if resp.status != 200:
+                    logger.error("Password grant failed %s: %s", resp.status, text)
+                    raise HTTPException(401, f"Password grant error: {text}")
+                return await resp.json()
+
+    def _is_jwt_expired(self, token: str) -> bool:
+        try:
+            payload = jwt.decode(token, options={"verify_signature": False})
+            return payload.get("exp", 0) < time.time()
+        except Exception:
+            return True
+
     async def validate_and_refresh(self) -> str:
         """
-        1. Locally checks exp в JWT.
-        2. If token expired — does /introspect/ in auth server API.
-        3. If introspect returns False — does /refresh_token/.
-        4. Saving new tokens in .env and returning new access_token.
+        1) If refresh_token expired — trying password grant.
+        2) Otherwise, if access_token is not expired yet — introspect.
+        3) If introspect return False or access token is expired — refresh.
+        4) Setting new tokens and returning access_token.
         """
         access = config.get("ACCESS_TOKEN") or ""
         refresh = config.get("REFRESH_TOKEN") or ""
 
-        try:
-            payload = jwt.decode(access, options={"verify_signature": False})
-            logger.info("LOCAL: token valid, will use it")
-            if payload.get("exp", 0) < time.time():
-                raise ValueError("expired")
-        except Exception:
-            logger.info("LOCAL: token expired or invalid, will introspect/refresh")
+        if self._is_jwt_expired(refresh):
+            logger.info("Local: refresh token expired, falling back to password grant")
+            tokens = await self._password_grant()
 
         else:
-            if await self._introspect(access):
-                return access
-            logger.info("INTROSPECT: token inactive, will refresh")
+            if not self._is_jwt_expired(access):
+                logger.info("Local: access token still valid, will introspect")
+                if await self._introspect(access):
+                    return access
+                logger.info("Introspect: access token inactive, will refresh")
 
-        new = await self._refresh(refresh)
-        config.set("ACCESS_TOKEN", new["access_token"])
-        config.set("REFRESH_TOKEN", new["refresh_token"])
-        logger.info("Tokens updated in .env (expires_in=%s)", new.get("expires_in"))
-        return new["access_token"]
+            try:
+                tokens = await self._refresh(refresh)
+            except HTTPException as e:
+                if "Signature has expired" in e.detail:
+                    logger.info("Server: refresh token expired, falling back to password grant")
+                    tokens = await self._password_grant()
+                else:
+                    raise
+
+        config.set("ACCESS_TOKEN", tokens["access_token"])
+        config.set("REFRESH_TOKEN", tokens["refresh_token"])
+        logger.info("Tokens updated (expires_in=%s)", tokens.get("expires_in"))
+        return tokens["access_token"]
 
 
 class UrbanDbAPI:
