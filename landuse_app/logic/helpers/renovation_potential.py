@@ -12,6 +12,7 @@ import random
 
 from landuse_app.schemas import GeoJSON, Profile
 from storage.caching import caching_service
+from .interpretation_service import interpretation_service
 from .spatial_methods import SpatialMethods
 from .urban_api_access import get_all_physical_objects_geometries, get_functional_zones_scenario_id, \
     get_all_physical_objects_geometries_scen_id_percentages, get_functional_zones_scen_id_percentages, \
@@ -635,6 +636,7 @@ async def get_renovation_potential(
     logger.info("Потенциал для реновации рассчитан")
 
     zones = landuse_polygons_ren_pot.to_crs(utm_crs)
+    zones["Converted"] = None
 
     oop_objects = physical_objects[physical_objects["object_type"] == "ООПТ"]
     if not oop_objects.empty:
@@ -684,7 +686,10 @@ async def get_renovation_potential(
     grouped = joined.groupby(joined.index)['intersection_area'].sum()
     final_overlap_ratio = grouped / renovated.loc[grouped.index].geometry.area
     to_update = final_overlap_ratio[final_overlap_ratio > 0.50].index
-    zones.loc[to_update, 'Потенциал'] = 'Не подлежащие реновации'
+    mask_renovation = zones.index.isin(to_update)
+    zones.loc[mask_renovation  & zones['Потенциал'].notnull(), 'Потенциал'] = \
+        'Не подлежащие реновации'
+    zones.loc[to_update, 'Converted'] = True
     landuse_polygons_ren_pot = zones.to_crs(epsg=4326)
 
     result_json = json.loads(landuse_polygons_ren_pot.to_json())
@@ -719,9 +724,11 @@ async def filter_response(polygons_gdf: gpd.GeoDataFrame, filter_type: bool = Fa
     if filter_type: # реновация
         required_columns = [
             "Тип землепользования",
-            "Площадь",
             "Уровень урбанизации",
+            "Пояснение уровня урбанизации",
             "Потенциал реновации",
+            "Пояснение потенциала реновации",
+            "Площадь",
             "geometry"
         ]
         polygons_gdf = polygons_gdf.rename(columns=columns_mapping)
@@ -732,6 +739,7 @@ async def filter_response(polygons_gdf: gpd.GeoDataFrame, filter_type: bool = Fa
         required_columns = [
             "Тип землепользования",
             "Уровень урбанизации",
+            "Пояснение уровня урбанизации",
             "Площадь",
             "geometry"
         ]
@@ -827,6 +835,8 @@ async def get_projects_renovation_potential(project_id: int, source: str = None)
         if "Неудобия" in landuse_polygons.columns and not landuse_polygons["Неудобия"].isna().iloc[0]
         else None
     )
+    landuse_polygons = await interpretation_service.interpret_urbanization_value(landuse_polygons)
+    landuse_polygons = await interpretation_service.interpret_renovation_value(landuse_polygons)
     landuse_polygons = await filter_response(landuse_polygons, True)
     geojson = GeoJSON.from_geodataframe(landuse_polygons)
 
@@ -842,6 +852,8 @@ async def get_projects_urbanization_level(project_id: int, source: str = None) -
     """Calculate urbanization level for project."""
     logger.info(f"Calculating urbanization level for project {project_id}")
     landuse_polygons = await get_renovation_potential(project_id, is_context=False, source=source)
+    landuse_polygons = await interpretation_service.interpret_urbanization_value(landuse_polygons)
+    landuse_polygons = await interpretation_service.interpret_renovation_value(landuse_polygons)
     landuse_polygons = await filter_response(landuse_polygons)
     return GeoJSON.from_geodataframe(landuse_polygons)
 
@@ -856,6 +868,8 @@ async def get_projects_context_renovation_potential(project_id: int, source: str
         if "Неудобия" in landuse_polygons.columns and not landuse_polygons["Неудобия"].isna().iloc[0]
         else None
     )
+    landuse_polygons = await interpretation_service.interpret_urbanization_value(landuse_polygons)
+    landuse_polygons = await interpretation_service.interpret_renovation_value(landuse_polygons)
     landuse_polygons = await filter_response(landuse_polygons, True)
     geojson = GeoJSON.from_geodataframe(landuse_polygons)
 
@@ -871,6 +885,8 @@ async def get_projects_context_urbanization_level(project_id: int, source: str =
     """Calculate urbanization level for project's context."""
     logger.info(f"Calculating urbanization level for project {project_id}")
     landuse_polygons = await get_renovation_potential(project_id, is_context=True, source=source)
+    landuse_polygons = await interpretation_service.interpret_urbanization_value(landuse_polygons)
+    landuse_polygons = await interpretation_service.interpret_renovation_value(landuse_polygons)
     landuse_polygons = await filter_response(landuse_polygons)
     return GeoJSON.from_geodataframe(landuse_polygons)
 
