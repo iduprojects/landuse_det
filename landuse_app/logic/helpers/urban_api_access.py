@@ -93,10 +93,19 @@ async def _form_source_params(sources: list[dict]) -> dict:
     source_names = [i["source"] for i in sources]
     source_data_df = pd.DataFrame(sources)
 
+    # if "OSM" in source_names:
+    #     return source_data_df.loc[
+    #         source_data_df[source_data_df["source"] == "OSM"]["year"].idxmax()
+    #     ].to_dict()
+
     if "OSM" in source_names:
-        return source_data_df.loc[
-            source_data_df[source_data_df["source"] == "OSM"]["year"].idxmax()
-        ].to_dict()
+        osm_df = source_data_df[source_data_df["source"] == "OSM"]
+        if 2024 in osm_df["year"].values:
+            chosen = osm_df[osm_df["year"] == 2024].iloc[0]
+        else:
+            chosen = osm_df[osm_df["year"] < 2025].sort_values("year", ascending=False).iloc[0]
+        return chosen.to_dict()
+
     elif "PZZ" in source_names:
         return source_data_df.loc[
             source_data_df[source_data_df["source"] == "PZZ"]["year"].idxmax()
@@ -232,6 +241,7 @@ async def get_all_physical_objects_geometries_scen_id_percentages(scenario_id: i
 
     return response
 
+
 async def get_functional_zone_sources_territory_id(territory_id: int, source: str = None) -> dict:
     """
         Fetch available functional zone sources for a given scenario ID and determine the best source.
@@ -260,7 +270,9 @@ async def get_functional_zone_sources_territory_id(territory_id: int, source: st
 
     return await _form_source_params(response)
 
-async def get_functional_zones_territory_id(territory_id: int, source: str = None) -> dict:
+
+async def get_functional_zones_territory_id(territory_id: int, source: str = None, functional_zone_type_id: int = None,
+                                            params: dict = None) -> dict:
     """
         Fetches functional zones for a project with an optional context flag and source selection.
 
@@ -283,19 +295,50 @@ async def get_functional_zones_territory_id(territory_id: int, source: str = Non
     source = source_data["source"]
     year = source_data["year"]
 
-    endpoint = (
-        f"/api/v1/territory/{territory_id}/functional_zones?year={year}&source={source}"
-    )
+    if functional_zone_type_id:
+        endpoint = (
+            f"/api/v1/territory/{territory_id}/functional_zones?year={year}&source={source}&functional_zone_type_id={functional_zone_type_id}"
+        )
+    else:
+        endpoint = (
+            f"/api/v1/territory/{territory_id}/functional_zones?year={year}&source={source}"
+        )
 
-    response = await urban_db_api.get(endpoint)
+    response = await urban_db_api.get(endpoint, params=params)
     if not response:
         raise http_exception(404, "No functional zones found for the given project ID", territory_id)
 
     return response
 
+
+async def get_functional_zones_geojson_territory_id(territory_id: int, source: str = None,
+                                                    functional_zone_type_id: int = None, params: dict = None) -> dict:
+    source_data = await get_functional_zone_sources_territory_id(territory_id, source)
+    if not source_data or "source" not in source_data or "year" not in source_data:
+        raise http_exception(404, "No valid source found for the given project ID", territory_id)
+    source = source_data["source"]
+    year = source_data["year"]
+    if functional_zone_type_id:
+        endpoint = (
+            f"/api/v1/territory/{territory_id}/functional_zones?year={year}&source={source}&functional_zone_type_id={functional_zone_type_id}"
+        )
+    else:
+        endpoint = (f"/api/v1/territory/{territory_id}/functional_zones?year={year}&source={source}"
+                    )
+
+    response = await urban_db_api.get(endpoint, params=params)
+    return response
+
+
+async def get_target_cities(territory_id: int) -> dict:
+    endpoint = f"/api/v1/all_territories_without_geometry?parent_id={territory_id}&page_size=5000&get_all_levels=true&cities_only=true"
+    response = await urban_db_api.get(endpoint)
+    return response
+
+
 async def get_physical_objects_from_territory(territory_id: int) -> dict:
     """
-    Fetches all physical object geometries for a project, optionally for context.
+    Fetches all physical object geometries for a territory.
 
     Parameters:
         territory_id (int): ID of the territory.
@@ -311,11 +354,18 @@ async def get_physical_objects_from_territory(territory_id: int) -> dict:
         f"/api/v1/territory/{territory_id}/physical_objects_geojson"
     )
 
-
     response = await urban_db_api.get(endpoint)
     if not response or "features" not in response or not response["features"]:
         raise http_exception(404, "No physical objects found for the given territory ID:", territory_id)
 
+    return response
+
+
+async def get_physical_objects_without_geometry(territory_id: int, params: dict = None) -> dict:
+    endpoint = (
+        f"/api/v1/territory/{territory_id}/physical_objects"
+    )
+    response = await urban_db_api.get(endpoint, params=params)
     return response
 
 
@@ -341,6 +391,7 @@ async def check_urbanization_indicator_exists(territory_id: int) -> dict | None:
         return None
     return data
 
+
 async def check_indicator_exists(territory_id: int, indicator_id: int) -> dict | None:
     """
     Attempts to retrieve an existing indicator from the database.
@@ -361,6 +412,17 @@ async def check_indicator_exists(territory_id: int, indicator_id: int) -> dict |
     if not data:
         return None
     return data
+
+
+async def get_indicator_values(territory_id: int, indicator_id: int, params: dict = None) -> dict | None:
+    endpoint = (
+        f"/api/v1/territory/{territory_id}/indicator_values"
+        f"?indicator_ids={indicator_id}"
+    )
+    response = await urban_db_api.get(endpoint, params=params)
+    if not response:
+        return None
+    return response
 
 
 async def put_indicator_value(indicator_data: dict) -> dict:
@@ -389,7 +451,8 @@ async def put_indicator_value(indicator_data: dict) -> dict:
     return await urban_db_api.put(endpoint, data=indicator_data)
 
 
-async def get_physical_objects_from_territory_parallel(territory_id: int, page_size: int = int(config.get("PAGE_SIZE"))) -> list[dict]:
+async def get_physical_objects_from_territory_parallel(territory_id: int,
+                                                       page_size: int = int(config.get("PAGE_SIZE"))) -> list[dict]:
     """
     Fetch physical objects from a territory in parallel with a concurrency limit of 5.
 
@@ -465,6 +528,14 @@ async def get_service_count(territory_id: int, service_type_id: int) -> int:
     return number_of_services
 
 
+async def get_services_geojson(territory_id: int, service_type_id: int, params: dict = None) -> dict:
+    endpoint = f"/api/v1/territory/{territory_id}/services_geojson?service_type_id={service_type_id}"
+    response = await urban_db_api.get(endpoint, params=params)
+    if not response:
+        raise http_exception(404, "No services found for given territory ID:", territory_id)
+    return response
+
+
 async def check_project_indicator_exist(project_id: int, indicator_id: int) -> dict | None:
     """
     Attempts to retrieve an existing indicator from the database.
@@ -485,12 +556,12 @@ async def check_project_indicator_exist(project_id: int, indicator_id: int) -> d
 
 
 async def put_project_indicator(
-    scenario_id: int,
-    indicator_data: dict,
-    *,
-    use_token: bool = True,
-    override_token: str | None = None,
-    extra_headers: dict[str, str] | None = None
+        scenario_id: int,
+        indicator_data: dict,
+        *,
+        use_token: bool = True,
+        override_token: str | None = None,
+        extra_headers: dict[str, str] | None = None
 ) -> dict:
     endpoint = f"/api/v1/scenarios/{scenario_id}/indicators_values"
     return await urban_db_api.put(
