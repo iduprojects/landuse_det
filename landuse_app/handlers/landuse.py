@@ -264,7 +264,7 @@ async def population_density_indicator(
 @indicators_router.post(
     path="/indicators/{territory_id}/target_cities_indicator",
     description='Calculate and store the target cities indicator for a given territory in Urban DB.')
-async def population_density_indicator(
+async def target_cities_indicator(
         territory_id: int = Path(description="The unique identifier of the territory."),
         force_recalculate: bool = Query(
             False,
