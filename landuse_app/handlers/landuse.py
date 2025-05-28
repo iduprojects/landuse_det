@@ -285,7 +285,7 @@ async def target_cities_indicator(
         Количество малых (население менее 50 000 человек) городов на территории (`indicator_id = 12`)
         """
 )
-async def big_cities_indicator(
+async def cities_indicator(
         territory_id: int = Path(description="The unique identifier of the territory."),
         indicator_id: int = Path(description="The unique identifier of the indicator city size."),
         force_recalculate: bool = Query(
