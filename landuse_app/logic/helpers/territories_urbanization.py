@@ -1,4 +1,5 @@
 import json
+import random
 from datetime import datetime
 import geopandas as gpd
 import pandas as pd
@@ -6,254 +7,257 @@ from loguru import logger
 from shapely.geometry import shape
 import asyncio
 from pandarallel import pandarallel
-import random
 
 from storage.caching import caching_service
+from .preprocessing_service import data_extraction
 from .renovation_potential import analyze_geojson_for_renovation_potential, process_zones_with_bulk_update, \
     assign_development_type
 from .urban_api_access import get_functional_zones_territory_id, get_functional_zone_sources_territory_id, \
     check_urbanization_indicator_exists, put_indicator_value, get_physical_objects_from_territory_parallel
-from ..constants.constants import zone_mapping
+from ..constants import actual_zone_mapping
+# from ..constants.constants import zone_mapping
 from ...exceptions.http_exception_wrapper import http_exception
 
 pandarallel.initialize(progress_bar=False, nb_workers=4)
 
 
-def parse_physical_object(obj: dict[str, any]) -> list[dict[str, any]]:
-    """
-    Parses a single physical object from the API response into a structured dictionary
-    with geometry and additional attributes.
-
-    This function:
-      - Parses the geometry and validates it.
-      - Determines the object's category (residential, non_residential, recreational, or other).
-      - Calculates the number of storeys if building information is present.
-      - Processes services if the object is non-residential.
-
-    Returns a list of dictionaries because one object may contain multiple services,
-    resulting in multiple rows (one per service) in the final dataset.
-
-    Parameters:
-        obj (dict): A dictionary representing a physical object from the API response.
-
-    Returns:
-        list[dict]: A list of parsed physical objects with geometry and attributes ready for GeoDataFrame.
-    """
-    geometry_json = obj.get("geometry")
-    if not geometry_json:
-        return []
-
-    try:
-        shp = shape(geometry_json)
-        if not shp.is_valid:
-            shp = shp.buffer(0)
-        if shp.is_empty:
-            return []
-    except Exception as e:
-        logger.error(f"Error creating geometry: {e}")
-        return []
-
-    object_data = {
-        "physical_object_id": obj.get("physical_object_id"),
-        "object_type": obj.get("physical_object_type", {}).get("name", "Unknown"),
-        "object_type_id": obj.get("physical_object_type", {}).get("physical_object_type_id"),
-        "name": obj.get("name", "(unnamed)"),
-        "geometry_type": shp.geom_type,
-        "geometry": shp,
-        "category": None,
-        "storeys_count": None,
-        "living_area": None,
-        # "service_id": None,
-        # "service_name": None,
-    }
-
-    building = obj.get("building")
-    if building:
-        building_props = building.get("properties", {})
-        osm_data = building_props.get("osm_data", {})
-
-        floors = building.get("floors")
-        storeys_count = building_props.get("storeys_count")
-        building_levels = osm_data.get("building:levels")
-
-        if floors is not None and floors > 0:
-            final_floors = floors
-        elif storeys_count is not None and storeys_count > 0:
-            final_floors = storeys_count
-        elif building_levels:
-            try:
-                num = int(building_levels)
-                final_floors = max(num, 1)
-            except ValueError:
-                final_floors = random.randint(2, 5)
-        else:
-            final_floors = random.randint(2, 5)
-
-        object_data.update({
-            "category": "residential",
-            "storeys_count": final_floors,
-            "living_area": (
-                    building_props.get("living_area_official")
-                    or building_props.get("living_area_modeled")
-            ),
-        })
-
-    elif object_data["object_type_id"] == 5:
-        services = obj.get("services", [])
-        if services:
-            parsed = []
-            for service in services:
-                tmp = object_data.copy()
-                tmp["category"] = "non_residential"
-                tmp["is_capacity_real"] = service.get("is_capacity_real")
-                parsed.append(tmp)
-            return parsed
-        else:
-            object_data["category"] = "non_residential"
-
-    elif object_data["object_type"] == "Рекреационная зона":
-        object_data["category"] = "recreational"
-
-    else:
-        object_data["category"] = "other"
-
-    return [object_data]
-
-
-async def extract_physical_objects_from_territory(territory_id: int) -> dict[str, gpd.GeoDataFrame]:
-    """
-        Extracts and processes physical objects for a given territory using parallel API requests.
-
-        This function:
-          - Fetches physical objects with geometry for the specified territory via parallel paginated requests.
-          - Parses each object, extracting relevant attributes and geometry.
-          - Builds a GeoDataFrame from the parsed objects.
-          - Separates water bodies, green areas, and forests for area calculations.
-
-        Returns:
-            dict[str, gpd.GeoDataFrame]: A dictionary containing:
-                - "physical_objects": GeoDataFrame of all valid physical objects
-                - "water_objects": total area of water objects (in square meters)
-                - "green_objects": total area of green objects (in square meters)
-                - "forests": total area of forest objects (in square meters)
-        """
-    logger.info("Physical objects are loading with parallel processing")
-    raw_objects = await get_physical_objects_from_territory_parallel(territory_id)
-    all_data = []
-
-    for obj in raw_objects:
-        parsed_objects = parse_physical_object(obj)
-        all_data.extend(parsed_objects)
-    if not all_data:
-        raise http_exception(404, "No physical objects found for territory ID",  territory_id)
-
-    logger.success("Physical objects are loaded, creating the  GeoDataFrame")
-    all_data_df = pd.DataFrame(all_data)
-    all_data_gdf = gpd.GeoDataFrame(all_data_df, geometry="geometry", crs="EPSG:4326")
-    all_data_gdf = all_data_gdf.drop_duplicates(subset='physical_object_id')
-    all_data_gdf = all_data_gdf.dropna(subset=['geometry'])
-    all_data_gdf = all_data_gdf[all_data_gdf.geometry.type.isin(['Polygon', 'MultiPolygon'])]
-    all_data_gdf = all_data_gdf[all_data_gdf.geometry.is_valid]
-    if len(all_data_gdf) < 1:
-        raise http_exception(404, "No polygonal physical objects found for territory ID",  territory_id)
-    local_crs = all_data_gdf.estimate_utm_crs()
-
-    water_objects_gdf = all_data_gdf[
-        all_data_gdf['object_type'].isin(["Озеро", "Водный объект", "Река"])
-    ].to_crs(local_crs)
-
-    green_objects_gdf = all_data_gdf[
-        all_data_gdf['object_type'].isin(["Травяное покрытие", "Зелёная зона"])
-    ].to_crs(local_crs)
-
-    forests_gdf = all_data_gdf[
-        all_data_gdf['object_type'].isin(["Лес"])
-    ].to_crs(local_crs)
-
-    logger.success("Physical objects are successfully loaded into GeoDataFrame")
-    return {
-        "physical_objects": all_data_gdf,
-        "water_objects": water_objects_gdf.area.sum(),
-        "green_objects": green_objects_gdf.area.sum(),
-        "forests": forests_gdf.area.sum()
-    }
-
-async def extract_landuse_from_territory(territory_id, source: str = None,)\
-        -> gpd.GeoDataFrame:
-    """
-    Extracts functional zones polygons for a given project and returns them as a GeoDataFrame.
-
-    Parameters:
-    project_id : int
-        The ID of the project for which land use data is to be extracted.
-    is_context : bool
-        Flag to determine if context-specific functional zones should be fetched.
-
-    Returns:
-    gpd.GeoDataFrame
-        A GeoDataFrame containing land use polygons with relevant attributes.
-
-    Raises:
-    KeyError
-        If required keys are missing in the fetched data.
-    ValueError
-        If the input data is malformed or invalid.
-    """
-    geojson_data = await get_functional_zones_territory_id(territory_id, source)
-    logger.info("Functional zones are loading")
-
-    features = geojson_data
-    geometries = []
-    for feature in features:
-        try:
-            geom = shape(feature["geometry"])
-            if not geom.is_valid:
-                geom = geom.buffer(0)
-            geometries.append(geom)
-        except Exception as e:
-            logger.error(f"Error processing geometry: {e}")
-            geometries.append(None)
-
-    properties = [feature["properties"] for feature in features]
-    landuse_polygons = gpd.GeoDataFrame(properties, geometry=geometries, crs="EPSG:4326")
-
-    if 'properties' in landuse_polygons.columns:
-        landuse_polygons['landuse_zone'] = landuse_polygons['properties'].apply(
-            lambda x: x.get('landuse_zon') if isinstance(x, dict) else None)
-
-    if 'functional_zone_type' in landuse_polygons.columns:
-        landuse_polygons['zone_type_id'] = landuse_polygons['functional_zone_type'].apply(
-            lambda x: x.get('id') if isinstance(x, dict) else None)
-        landuse_polygons['zone_type_name'] = landuse_polygons['functional_zone_type'].apply(
-            lambda x: x.get('name') if isinstance(x, dict) and x.get('name') != "unknown" else "residential"
-        )
-        landuse_polygons['zone_type_nickname'] = landuse_polygons['functional_zone_type'].apply(
-            lambda x: x.get('nickname') if isinstance(x, dict) and x.get('nickname') != "unknown" else "Жилая зона"
-        )
-
-    if "territory" in landuse_polygons.columns:
-        landuse_polygons['zone_type_parent_territory_id'] = landuse_polygons['territory'].apply(
-            lambda x: x.get('id') if isinstance(x, dict) else None)
-        landuse_polygons['zone_type_parent_territory_name'] = landuse_polygons['territory'].apply(
-            lambda x: x.get('name') if isinstance(x, dict) else None)
-
-    landuse_polygons.drop(
-        columns=['properties', 'functional_zone_type', 'territory', 'created_at', 'updated_at', 'zone_type_name'],
-        inplace=True, errors='ignore'
-    )
-
-    landuse_polygons.replace({
-        "zone_type_name": {"unknown": "residential"},
-        "zone_type_nickname": {"unknown": "Жилая зона"}
-    }, inplace=True)
-
-    if 'landuse_zon' in landuse_polygons.columns:
-        landuse_polygons.rename(columns={'landuse_zon': 'landuse_zone'}, inplace=True)
-
-    if 'landuse_zone' not in landuse_polygons.columns:
-        landuse_polygons['landuse_zone'] = 'Residential'
-    logger.success("Functional zones are loaded")
-    return landuse_polygons
+# def parse_physical_object(obj: dict[str, any]) -> list[dict[str, any]]:
+#     """
+#     Parses a single physical object from the API response into a structured dictionary
+#     with geometry and additional attributes.
+#
+#     This function:
+#       - Parses the geometry and validates it.
+#       - Determines the object's category (residential, non_residential, recreational, or other).
+#       - Calculates the number of storeys if building information is present.
+#       - Processes services if the object is non-residential.
+#
+#     Returns a list of dictionaries because one object may contain multiple services,
+#     resulting in multiple rows (one per service) in the final dataset.
+#
+#     Parameters:
+#         obj (dict): A dictionary representing a physical object from the API response.
+#
+#     Returns:
+#         list[dict]: A list of parsed physical objects with geometry and attributes ready for GeoDataFrame.
+#     """
+#     geometry_json = obj.get("geometry")
+#     if not geometry_json:
+#         return []
+#
+#     try:
+#         shp = shape(geometry_json)
+#         if not shp.is_valid:
+#             shp = shp.buffer(0)
+#         if shp.is_empty:
+#             return []
+#     except Exception as e:
+#         logger.error(f"Error creating geometry: {e}")
+#         return []
+#
+#     object_data = {
+#         "physical_object_id": obj.get("physical_object_id"),
+#         "object_type": obj.get("physical_object_type", {}).get("name", "Unknown"),
+#         "object_type_id": obj.get("physical_object_type", {}).get("physical_object_type_id"),
+#         "name": obj.get("name", "(unnamed)"),
+#         "geometry_type": shp.geom_type,
+#         "geometry": shp,
+#         "category": None,
+#         "storeys_count": None,
+#         "living_area": None,
+#         # "service_id": None,
+#         # "service_name": None,
+#     }
+#
+#     building = obj.get("building")
+#     if building:
+#         building_props = building.get("properties", {})
+#         osm_data = building_props.get("osm_data", {})
+#
+#         floors = building.get("floors")
+#         storeys_count = building_props.get("storeys_count")
+#         building_levels = osm_data.get("building:levels")
+#
+#         if floors is not None and floors > 0:
+#             final_floors = floors
+#         elif storeys_count is not None and storeys_count > 0:
+#             final_floors = storeys_count
+#         elif building_levels:
+#             try:
+#                 num = int(building_levels)
+#                 final_floors = max(num, 1)
+#             except ValueError:
+#                 final_floors = random.randint(2, 5)
+#         else:
+#             final_floors = random.randint(2, 5)
+#
+#         object_data.update({
+#             "category": "residential",
+#             "storeys_count": final_floors,
+#             "living_area": (
+#                     building_props.get("living_area_official")
+#                     or building_props.get("living_area_modeled")
+#             ),
+#         })
+#
+#     elif object_data["object_type_id"] == 5:
+#         services = obj.get("services", [])
+#         if services:
+#             parsed = []
+#             for service in services:
+#                 tmp = object_data.copy()
+#                 tmp["category"] = "non_residential"
+#                 tmp["service_id"] = service.get("service_id")  # Заполняем service_id
+#                 tmp["service_name"] = service.get("name")  # Заполняем имя сервиса (опционально)
+#                 tmp["is_capacity_real"] = service.get("is_capacity_real")
+#                 parsed.append(tmp)
+#             return parsed
+#         else:
+#             object_data["category"] = "non_residential"
+#
+#     elif object_data["object_type"] == "Рекреационная зона":
+#         object_data["category"] = "recreational"
+#
+#     else:
+#         object_data["category"] = "other"
+#
+#     return [object_data]
+#
+#
+# async def extract_physical_objects_from_territory(territory_id: int) -> dict[str, gpd.GeoDataFrame]:
+#     """
+#         Extracts and processes physical objects for a given territory using parallel API requests.
+#
+#         This function:
+#           - Fetches physical objects with geometry for the specified territory via parallel paginated requests.
+#           - Parses each object, extracting relevant attributes and geometry.
+#           - Builds a GeoDataFrame from the parsed objects.
+#           - Separates water bodies, green areas, and forests for area calculations.
+#
+#         Returns:
+#             dict[str, gpd.GeoDataFrame]: A dictionary containing:
+#                 - "physical_objects": GeoDataFrame of all valid physical objects
+#                 - "water_objects": total area of water objects (in square meters)
+#                 - "green_objects": total area of green objects (in square meters)
+#                 - "forests": total area of forest objects (in square meters)
+#         """
+#     logger.info("Physical objects are loading with parallel processing")
+#     raw_objects = await get_physical_objects_from_territory_parallel(territory_id)
+#     all_data = []
+#
+#     for obj in raw_objects:
+#         parsed_objects = parse_physical_object(obj)
+#         all_data.extend(parsed_objects)
+#     if not all_data:
+#         raise http_exception(404, "No physical objects found for territory ID",  territory_id)
+#
+#     logger.success("Physical objects are loaded, creating the  GeoDataFrame")
+#     all_data_df = pd.DataFrame(all_data)
+#     all_data_gdf = gpd.GeoDataFrame(all_data_df, geometry="geometry", crs="EPSG:4326")
+#     all_data_gdf = all_data_gdf.drop_duplicates(subset='physical_object_id')
+#     all_data_gdf = all_data_gdf.dropna(subset=['geometry'])
+#     all_data_gdf = all_data_gdf[all_data_gdf.geometry.type.isin(['Polygon', 'MultiPolygon'])]
+#     all_data_gdf = all_data_gdf[all_data_gdf.geometry.is_valid]
+#     if len(all_data_gdf) < 1:
+#         raise http_exception(404, "No polygonal physical objects found for territory ID",  territory_id)
+#     local_crs = all_data_gdf.estimate_utm_crs()
+#
+#     water_objects_gdf = all_data_gdf[
+#         all_data_gdf['object_type_id'].isin([45, 2, 44])
+#     ].to_crs(local_crs)
+#
+#     green_objects_gdf = all_data_gdf[
+#         all_data_gdf['object_type_id'].isin([47, 3])
+#     ].to_crs(local_crs)
+#
+#     forests_gdf = all_data_gdf[
+#         all_data_gdf['object_type_id'].isin([48])
+#     ].to_crs(local_crs)
+#
+#     logger.success("Physical objects are successfully loaded into GeoDataFrame")
+#     return {
+#         "physical_objects": all_data_gdf,
+#         "water_objects": water_objects_gdf.area.sum(),
+#         "green_objects": green_objects_gdf.area.sum(),
+#         "forests": forests_gdf.area.sum()
+#     }
+#
+# async def extract_landuse_from_territory(territory_id, source: str = None,)\
+#         -> gpd.GeoDataFrame:
+#     """
+#     Extracts functional zones polygons for a given project and returns them as a GeoDataFrame.
+#
+#     Parameters:
+#     project_id : int
+#         The ID of the project for which land use data is to be extracted.
+#     is_context : bool
+#         Flag to determine if context-specific functional zones should be fetched.
+#
+#     Returns:
+#     gpd.GeoDataFrame
+#         A GeoDataFrame containing land use polygons with relevant attributes.
+#
+#     Raises:
+#     KeyError
+#         If required keys are missing in the fetched data.
+#     ValueError
+#         If the input data is malformed or invalid.
+#     """
+#     geojson_data = await get_functional_zones_territory_id(territory_id, source)
+#     logger.info("Functional zones are loading")
+#
+#     features = geojson_data
+#     geometries = []
+#     for feature in features:
+#         try:
+#             geom = shape(feature["geometry"])
+#             if not geom.is_valid:
+#                 geom = geom.buffer(0)
+#             geometries.append(geom)
+#         except Exception as e:
+#             logger.error(f"Error processing geometry: {e}")
+#             geometries.append(None)
+#
+#     properties = [feature["properties"] for feature in features]
+#     landuse_polygons = gpd.GeoDataFrame(properties, geometry=geometries, crs="EPSG:4326")
+#
+#     if 'properties' in landuse_polygons.columns:
+#         landuse_polygons['landuse_zone'] = landuse_polygons['properties'].apply(
+#             lambda x: x.get('landuse_zon') if isinstance(x, dict) else None)
+#
+#     if 'functional_zone_type' in landuse_polygons.columns:
+#         landuse_polygons['zone_type_id'] = landuse_polygons['functional_zone_type'].apply(
+#             lambda x: x.get('id') if isinstance(x, dict) else None)
+#         landuse_polygons['zone_type_name'] = landuse_polygons['functional_zone_type'].apply(
+#             lambda x: x.get('name') if isinstance(x, dict) and x.get('name') != "unknown" else "residential"
+#         )
+#         landuse_polygons['zone_type_nickname'] = landuse_polygons['functional_zone_type'].apply(
+#             lambda x: x.get('nickname') if isinstance(x, dict) and x.get('nickname') != "unknown" else "Жилая зона"
+#         )
+#
+#     if "territory" in landuse_polygons.columns:
+#         landuse_polygons['zone_type_parent_territory_id'] = landuse_polygons['territory'].apply(
+#             lambda x: x.get('id') if isinstance(x, dict) else None)
+#         landuse_polygons['zone_type_parent_territory_name'] = landuse_polygons['territory'].apply(
+#             lambda x: x.get('name') if isinstance(x, dict) else None)
+#
+#     landuse_polygons.drop(
+#         columns=['properties', 'functional_zone_type', 'territory', 'created_at', 'updated_at', 'zone_type_name'],
+#         inplace=True, errors='ignore'
+#     )
+#
+#     landuse_polygons.replace({
+#         "zone_type_name": {"unknown": "residential"},
+#         "zone_type_nickname": {"unknown": "Жилая зона"}
+#     }, inplace=True)
+#
+#     if 'landuse_zon' in landuse_polygons.columns:
+#         landuse_polygons.rename(columns={'landuse_zon': 'landuse_zone'}, inplace=True)
+#
+#     if 'landuse_zone' not in landuse_polygons.columns:
+#         landuse_polygons['landuse_zone'] = 'Residential'
+#     logger.success("Functional zones are loaded")
+#     return landuse_polygons
 
 
 async def get_territory_renovation_potential(
@@ -301,8 +305,8 @@ async def get_territory_renovation_potential(
         return gpd.GeoDataFrame.from_features(cached_data, crs="EPSG:4326")
 
     physical_objects_dict, landuse_polygons = await asyncio.gather(
-        extract_physical_objects_from_territory(territory_id),
-        extract_landuse_from_territory(territory_id, source)
+        data_extraction.extract_physical_objects_from_territory(territory_id),
+        data_extraction.extract_landuse_from_territory(territory_id, source)
     )
     logger.success("Physical objects are loaded")
     physical_objects = physical_objects_dict["physical_objects"]
@@ -317,7 +321,7 @@ async def get_territory_renovation_potential(
     logger.success("Functional zones and physical objects are filtered")
 
     landuse_polygons = await process_zones_with_bulk_update(landuse_polygons, physical_objects,
-                                                            zone_mapping)
+                                                            actual_zone_mapping)
     logger.success("Building percentages are calculated")
 
     landuse_polygons = await assign_development_type(landuse_polygons)
@@ -381,6 +385,17 @@ async def get_territory_renovation_potential(
     # to_update = final_overlap_ratio[final_overlap_ratio > 0.50].index
     # zones.loc[to_update, 'Потенциал'] = 'Не подлежащие реновации'
     # landuse_polygons_ren_pot = zones.to_crs(epsg=4326)
+
+    zones = landuse_polygons_ren_pot.to_crs(utm_crs)
+    oop_objects = physical_objects[physical_objects["object_type"] == "ООПТ"]
+    if not oop_objects.empty:
+        oop_objects = oop_objects.to_crs(zones.crs)
+        oop_join = gpd.sjoin(zones, oop_objects, how="inner", predicate="intersects")
+        if not oop_join.empty:
+            oop_zone_ids = oop_join["functional_zone_id"].unique()
+            zones.loc[zones["functional_zone_id"].isin(oop_zone_ids), "Потенциал"] = "Не подлежащие реновации"
+            zones.loc[zones["functional_zone_id"].isin(
+                oop_zone_ids), "Процент урбанизации"] = "Высоко урбанизированная территория"
 
     result_json = json.loads(landuse_polygons_ren_pot.to_json())
     caching_service.save_with_cleanup(
