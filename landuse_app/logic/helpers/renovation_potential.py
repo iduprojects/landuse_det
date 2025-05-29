@@ -252,9 +252,31 @@ def calculate_profiled_by_criteria(
     criteria_list: list[dict]
 ) -> float:
     """
-    Считает процент площади объектов, удовлетворяющих любому из переданных критериев:
-      - physical_object_type_id
-      - service_type_id
+    Calculate the percentage of a zone's area covered by features matching any of the given criteria.
+
+    This function takes a GeoDataFrame of features (`matches_gdf`), a target zone geometry
+    (`zone_geometry`), and a list of matching criteria. Each criterion is a dict that may
+    specify one or both of:
+      - `physical_object_type_id`: match against `matches_gdf["object_type_id"]`
+      - `service_type_id`:          match against `matches_gdf["service_id"]`
+
+    The percentage is computed as:
+        (total area of all matching features in the zone) / (zone area) * 100
+
+    Args:
+        matches_gdf (gpd.GeoDataFrame):
+            GeoDataFrame containing feature geometries and at least the columns
+            `object_type_id` and `service_id`.
+        zone_geometry (Polygon or MultiPolygon):
+            The geometry of the zone within which to measure coverage.
+        criteria_list (list of dict):
+            A list of criteria dictionaries. Each dict may include the keys
+            `physical_object_type_id` and/or `service_type_id` to filter `matches_gdf`.
+
+    Returns:
+        float: The percentage (0.0–100.0) of the zone's area covered by features
+               that satisfy any of the provided criteria. Returns 0.0 if the zone
+               is empty or no features match.
     """
     if zone_geometry is None or zone_geometry.area == 0:
         return 0.0
@@ -286,7 +308,26 @@ async def process_zones_with_bulk_update(
     zone_mapping: dict[str, list[dict]]
 ) -> gpd.GeoDataFrame:
     """
-    Аналог process_zones, но профиль по physical_object_type_id и service_type_id.
+    Asynchronously processes land-use zones and updates building metrics.
+
+    This function processes zones in the GeoDataFrame `landuse_polygons`, calculating
+    building percentages and area metrics for each zone using physical objects data.
+
+    Parameters:
+    -----------
+    landuse_polygons : gpd.GeoDataFrame
+        GeoDataFrame containing land-use zones to process.
+    physical_objects : gpd.GeoDataFrame
+        GeoDataFrame with physical object geometries and attributes.
+    physical_objects_sindex : rtree.index.Index
+        Spatial index for `physical_objects` to improve query performance.
+    zone_mapping :  dict[str, list[dict]]
+        Mapping of zone types to relevant profile types.
+
+    Returns:
+    --------
+    gpd.GeoDataFrame
+        Updated `landuse_polygons` with calculated building percentages and area metrics.
     """
     def process_zone(row):
         idx, zone = row.name, row

@@ -470,8 +470,26 @@ class PreProcessingService:
             service_type_ids=None
     ) -> gpd.GeoDataFrame:
         """
-        Извлекает все услуги для заданных service_type_id внутри территории,
-        флаттенит вложенные структуры и собирает единый GeoDataFrame.
+        Retrieve and flatten service features for the specified territory and service types.
+
+        This asynchronous function fetches GeoJSON features for each service type ID provided,
+        flattens nested properties (including service_type and urban_function metadata),
+        and combines them into a single GeoDataFrame. If no services are found, an empty
+        GeoDataFrame is returned.
+
+        Args:
+            territory_id (int):
+                The identifier of the territory to query services for.
+            service_type_ids (list[int], optional):
+                A list of service_type_id values to include. Defaults to [2, 4, 1, 81]
+                if None is provided.
+
+        Returns:
+            gpd.GeoDataFrame:
+                A GeoDataFrame containing one row per service feature, with flattened
+                attribute columns and valid Polygon/MultiPolygon geometries in an
+                appropriate UTM projection. Columns osm_id, full_id, leisure, osm_type,
+                capacity, and fid are dropped.
         """
         if service_type_ids is None:
             service_type_ids = [2, 4, 1, 81]
