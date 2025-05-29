@@ -172,39 +172,73 @@ class IndicatorsService:
         return computed
 
     @staticmethod
-    async def big_cities(territory_id: int, indicator_id: int, force_recalculate: bool = False) -> dict:
+    async def city_size_indicator(
+            territory_id: int,
+            indicator_id: int,
+            force_recalculate: bool = False
+    ) -> dict:
+        """
+        Count cities on a territory by population size category and store the result.
+
+        Depending on `indicator_id`, this routine will:
+          - 10: count "large" cities (population ≥ 100 000)
+          - 11: count "medium" cities (50 000 ≤ population < 100 000)
+          - 12: count "small" cities (population <  50 000)
+
+        It always fetches the **population** values (indicator 10) for all child
+        territories marked as cities, then applies the appropriate threshold, and
+        finally writes the count back under the given `indicator_id`.
+
+        Args:
+            territory_id (int):
+                ID of the parent territory to query city populations for.
+            indicator_id (int):
+                Which output indicator to write:
+                  - 10 large cities
+                  - 11 medium cities
+                  - 12 small cities
+            force_recalculate (bool):
+                If False, will first check for an existing stored value and return it
+                if present. Otherwise, always re‐compute and overwrite.
+
+        Returns:
+            dict: the API response from `put_indicator_value` for the stored count.
+        """
         if not force_recalculate:
-            # existing = await check_indicator_exists(territory_id, indicator_id=10)
-            existing = await check_indicator_exists(territory_id, indicator_id)
+            existing = await check_indicator_exists(territory_id, indicator_id=indicator_id)
             if existing is not None:
-                logger.info("Existing density indicator found, returning it")
+                logger.info(f"Returning cached indicator {indicator_id} for territory {territory_id}")
                 return existing
-        logger.info(f"Started calculation for territory {territory_id}")
+
         params = {
             "cities_only": "true",
             "include_child_territories": "true",
             "last_only": "true",
         }
-        # big_cities_response = await get_indicator_values(territory_id, indicator_id=10, params=params)
-        big_cities_response = await get_indicator_values(territory_id, indicator_id=1, params=params)
-        if not big_cities_response:
-            large_count = 0
+        pop_values = await get_indicator_values(territory_id, indicator_id=10, params=params)
+        values = [item.get("value", 0) for item in (pop_values or [])]
+
+        if indicator_id == 10:
+            count = sum(1 for v in values if v >= 100_000)
+        elif indicator_id == 11:
+            count = sum(1 for v in values if 50_000 <= v < 100_000)
+        elif indicator_id == 12:
+            count = sum(1 for v in values if v < 50_000)
         else:
-            values = [item.get("value", 0) for item in big_cities_response]
-            large_count = sum(1 for v in values if v >= 100_000)
+            raise ValueError(f"Unsupported indicator_id {indicator_id}")
+
         payload = {
             "indicator_id": indicator_id,
             "territory_id": territory_id,
             "date_type": "year",
             "date_value": "2025-01-01",
-            "value": large_count,
+            "value": count,
             "value_type": "real",
             "information_source": "modeled",
         }
-        computed = await put_indicator_value(payload)
-        logger.info(
-            f"Stored number of big cities count for territory {territory_id} and indicator {indicator_id}: {large_count}")
-        return computed
+        result = await put_indicator_value(payload)
+        logger.info(f"Stored {count} cities for territory={territory_id}, indicator={indicator_id}")
+        return result
 
     @staticmethod
     async def engineering_infrastructure(territory_id: int, force_recalculate: bool = False) -> dict:

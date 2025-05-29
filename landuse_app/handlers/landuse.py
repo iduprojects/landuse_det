@@ -295,7 +295,7 @@ async def cities_indicator(
             description="If True, forces recalculation even if the indicator already exists.")
 
 ):
-    big_cities_count = await IndicatorsService.big_cities(territory_id, indicator_id,
+    big_cities_count = await IndicatorsService.city_size_indicator(territory_id, indicator_id,
                                                           force_recalculate=force_recalculate)
     return big_cities_count
 
