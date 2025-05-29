@@ -8,7 +8,7 @@ from landuse_app.logic.helpers.spatial_methods import SpatialMethods
 from landuse_app.logic.helpers.urban_api_access import get_territory_boundaries, put_indicator_value, get_service_count, \
     get_service_type_id_through_indicator, check_indicator_exists, get_projects_territory, \
     check_project_indicator_exist, put_project_indicator, get_indicator_values, get_target_cities, \
-    get_physical_objects_without_geometry, get_functional_zones_territory_id, get_services_geojson, \
+    get_physical_objects_without_geometry, get_services_geojson, \
     get_functional_zones_geojson_territory_id
 
 import geopandas as gpd
@@ -26,7 +26,6 @@ class IndicatorsService:
                 logger.info(f"Indicator already exists in Urban DB, returning existing value")
                 return existing_indicator
         territory_data = await get_territory_boundaries(territory_id)
-        # territory_data = response.json()
         geometry = shape(territory_data["geometry"])
         gdf = gpd.gpd.GeoDataFrame(
             [{"territory_id": territory_data["territory_id"], "name": territory_data["name"], "geometry": geometry}],

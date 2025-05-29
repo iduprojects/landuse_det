@@ -1,4 +1,3 @@
-
 import random
 import geopandas as gpd
 import pandas as pd
@@ -6,7 +5,7 @@ from loguru import logger
 from shapely.geometry import shape
 from .urban_api_access import get_functional_zones_territory_id, get_physical_objects_from_territory_parallel, \
     get_all_physical_objects_geometries_scen_id_percentages, get_all_physical_objects_geometries, \
-    get_functional_zones_scen_id_percentages, get_functional_zones_scenario_id
+    get_functional_zones_scen_id_percentages, get_functional_zones_scenario_id, get_services_geojson
 from ...exceptions.http_exception_wrapper import http_exception
 
 
@@ -129,7 +128,6 @@ class PreProcessingService:
             "green_objects": green,
             "forests": forests
         }
-
 
     @staticmethod
     async def extract_landuse(project_id: int, is_context: bool, scenario_id_flag: bool = False, source: str = None, ) \
@@ -466,5 +464,67 @@ class PreProcessingService:
         logger.success("Functional zones are loaded")
         return landuse_polygons
 
+    @staticmethod
+    async def extract_services(
+            territory_id: int,
+            service_type_ids=None
+    ) -> gpd.GeoDataFrame:
+        """
+        Извлекает все услуги для заданных service_type_id внутри территории,
+        флаттенит вложенные структуры и собирает единый GeoDataFrame.
+        """
+        if service_type_ids is None:
+            service_type_ids = [2, 4, 1, 81]
+        all_features: list[dict[str, any]] = []
+
+        for service_type in service_type_ids:
+            resp = await get_services_geojson(territory_id, service_type)
+            features = resp.get("features") or resp.get("results") or []
+            all_features.extend(features)
+
+        if not all_features:
+            gdf = gpd.GeoDataFrame()
+            logger.warning(f"No services found for territory {territory_id} and service types {service_type_ids}")
+            return gdf
+
+        records = []
+        for feat in all_features:
+            geom_json = feat.get("geometry")
+            try:
+                geom = shape(geom_json) if geom_json else None
+            except Exception:
+                geom = None
+
+            props = feat.get("properties", {})
+            svc_type = props.pop("service_type", {})
+            uf = svc_type.pop("urban_function", {})
+
+            territories = props.pop("territories", [])
+            terr = territories[0] if territories else {}
+
+            flat = {"service_name": props.get("name"),
+                    "capacity": props.get("capacity"),
+                    "service_type_id": svc_type.get("service_type_id"), "service_type_name": svc_type.get("name"),
+                    **{k: v for k, v in props.get("properties", {}).items()
+                       if k not in ("name", "is_capacity_real")}, "geometry": geom}
+
+            records.append(flat)
+
+        df = pd.DataFrame(records)
+        gdf = gpd.GeoDataFrame(df, geometry="geometry", crs="EPSG:4326")
+        gdf = gdf.to_crs(gdf.estimate_utm_crs())
+        gdf = gdf[gdf.geometry.type.isin(['Polygon', 'MultiPolygon'])]
+        gdf = gdf.drop(
+            columns=[
+                'osm_id',
+                'full_id',
+                'leisure',
+                'osm_type',
+                'capacity',
+                'fid'
+            ]
+        )
+
+        return gdf
 
 data_extraction = PreProcessingService()
