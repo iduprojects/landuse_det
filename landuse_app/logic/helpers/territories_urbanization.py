@@ -8,7 +8,7 @@ from pandarallel import pandarallel
 
 from storage.caching import caching_service
 from .preprocessing_service import data_extraction
-from .renovation_potential import analyze_geojson_for_renovation_potential, process_zones_with_bulk_update, \
+from .renovation_potential import process_zones_with_bulk_update, \
     assign_development_type
 from .urban_api_access import get_functional_zone_sources_territory_id, \
     check_urbanization_indicator_exists, put_indicator_value
@@ -101,10 +101,7 @@ async def get_territory_renovation_potential(
     landuse_polygons = await assign_development_type(landuse_polygons)
     logger.success("Urbanization level is calculated")
 
-    landuse_polygons_ren_pot = await analyze_geojson_for_renovation_potential(landuse_polygons)
-    logger.success("Renovation potential is calculated")
-
-    zones = landuse_polygons_ren_pot.to_crs(utm_crs)
+    zones = landuse_polygons.to_crs(utm_crs)
     oop_objects = physical_objects[physical_objects["object_type"] == "ООПТ"]
     if not oop_objects.empty:
         oop_objects = oop_objects.to_crs(zones.crs)
@@ -115,13 +112,14 @@ async def get_territory_renovation_potential(
             zones.loc[zones["functional_zone_id"].isin(
                 oop_zone_ids), "Процент урбанизации"] = "Высоко урбанизированная территория"
 
-    result_json = json.loads(landuse_polygons_ren_pot.to_json())
+    landuse_polygons = landuse_polygons.to_crs(4326)
+    result_json = json.loads(landuse_polygons.to_json())
     caching_service.save_with_cleanup(
         result_json, cache_name,
         {"profile": "no_profile",
          "source": source_key})
 
-    return landuse_polygons_ren_pot
+    return landuse_polygons
 
 
 async def compute_urbanization_indicator(polygons_gdf: gpd.GeoDataFrame, territory_id: int) -> dict:
