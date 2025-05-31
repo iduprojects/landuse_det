@@ -108,27 +108,28 @@ async def get_territory_renovation_potential(
     high_obj_ids = {11, 61}
     high_srv_ids = {4, 81}
 
-    high_objs = physical_objects[
-        physical_objects["object_type_id"].isin(high_obj_ids) |
-        physical_objects["service_type_id"].isin(high_srv_ids)
-        ]
+    if "service_type_id" in physical_objects.columns:
+        high_objs = physical_objects[
+            physical_objects["object_type_id"].isin(high_obj_ids) |
+            physical_objects["service_type_id"].isin(high_srv_ids)
+            ]
 
-    if not high_objs.empty:
-        high_objs = high_objs.to_crs(zones.crs)
-        high_join = gpd.sjoin(
-            zones,
-            high_objs[["geometry"]],
-            how="inner",
-            predicate="intersects"
-        )
+        if not high_objs.empty:
+            high_objs = high_objs.to_crs(zones.crs)
+            high_join = gpd.sjoin(
+                zones,
+                high_objs[["geometry"]],
+                how="inner",
+                predicate="intersects"
+            )
 
-        if not high_join.empty:
-            high_zone_ids = high_join.index.unique()
+            if not high_join.empty:
+                high_zone_ids = high_join.index.unique()
 
-            zones.loc[
-                high_zone_ids,
-                "Уровень урбанизации"
-            ] = "Высоко урбанизированная территория"
+                zones.loc[
+                    high_zone_ids,
+                    "Уровень урбанизации"
+                ] = "Высоко урбанизированная территория"
 
     landuse_polygons = zones.to_crs("EPSG:4326")
     result_json = json.loads(landuse_polygons.to_json())
