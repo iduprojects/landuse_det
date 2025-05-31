@@ -75,6 +75,8 @@ async def get_territory_renovation_potential(
     if services_gdf.empty:
         combined_gdf = physical_objects.copy()
     else:
+        services_gdf = services_gdf.to_crs(physical_objects.crs)
+
         combined_df = pd.concat(
             [physical_objects, services_gdf],
             ignore_index=True,
@@ -102,17 +104,33 @@ async def get_territory_renovation_potential(
     logger.success("Urbanization level is calculated")
 
     zones = landuse_polygons.to_crs(utm_crs)
-    oop_objects = physical_objects[physical_objects["object_type"] == "ООПТ"]
-    if not oop_objects.empty:
-        oop_objects = oop_objects.to_crs(zones.crs)
-        oop_join = gpd.sjoin(zones, oop_objects, how="inner", predicate="intersects")
-        if not oop_join.empty:
-            oop_zone_ids = oop_join["functional_zone_id"].unique()
-            zones.loc[zones["functional_zone_id"].isin(oop_zone_ids), "Потенциал"] = "Не подлежащие реновации"
-            zones.loc[zones["functional_zone_id"].isin(
-                oop_zone_ids), "Процент урбанизации"] = "Высоко урбанизированная территория"
 
-    landuse_polygons = landuse_polygons.to_crs(4326)
+    high_obj_ids = {11, 61}
+    high_srv_ids = {4, 81}
+
+    high_objs = physical_objects[
+        physical_objects["object_type_id"].isin(high_obj_ids) |
+        physical_objects["service_type_id"].isin(high_srv_ids)
+        ]
+
+    if not high_objs.empty:
+        high_objs = high_objs.to_crs(zones.crs)
+        high_join = gpd.sjoin(
+            zones,
+            high_objs[["geometry"]],
+            how="inner",
+            predicate="intersects"
+        )
+
+        if not high_join.empty:
+            high_zone_ids = high_join.index.unique()
+
+            zones.loc[
+                high_zone_ids,
+                "Уровень урбанизации"
+            ] = "Высоко урбанизированная территория"
+
+    landuse_polygons = zones.to_crs("EPSG:4326")
     result_json = json.loads(landuse_polygons.to_json())
     caching_service.save_with_cleanup(
         result_json, cache_name,

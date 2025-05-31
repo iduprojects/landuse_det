@@ -328,13 +328,22 @@ async def process_zones_with_bulk_update(
             - “Любые здания /на зону” (total building area %)
             All percentage values are clipped to the [0, 100] range.
     """
-    def _sync_bulk(landuse_polygons, physical_objects, zone_mapping):
-        phys = physical_objects.to_crs(physical_objects.estimate_utm_crs())
-        phys["object_area"] = phys.geometry.area
+    def _sync_bulk(zones_gdf, phys_gdf, mapping):
+        utm_crs = zones_gdf.estimate_utm_crs()
+        phys = phys_gdf.to_crs(utm_crs).copy()
+        zones = zones_gdf.to_crs(utm_crs).copy().reset_index(drop=True)
 
-        zones = landuse_polygons.to_crs(landuse_polygons.estimate_utm_crs()).copy().reset_index(drop=True)
         zones["zone_area"] = zones.geometry.area
         zones["zone_id"] = zones.index
+        metric_cols = [
+            "ИЖС","Малоэтажная","Среднеэтажная","Многоэтажная",
+            "Процент профильных объектов","Любые здания /на зону"
+        ]
+        drop_existing = [c for c in metric_cols if c in zones.columns]
+        if drop_existing:
+            zones = zones.drop(columns=drop_existing)
+
+        phys["object_area"] = phys.geometry.area
 
         joined = gpd.sjoin(
             phys,
@@ -343,44 +352,55 @@ async def process_zones_with_bulk_update(
             predicate="intersects"
         )
 
+        if joined.empty:
+            result = zones.copy()
+            for c in metric_cols:
+                result[c] = 0.0
+            return (
+                result
+                .drop(columns=["zone_id", "zone_area"])
+                .to_crs(zones_gdf.crs)
+            )
+
         agg_list = []
         for zone_id, group in joined.groupby("zone_id"):
             pct = calculate_building_percentages(group)
-            criteria = zone_mapping.get(zones.at[zone_id, "landuse_zone"], [])
-            prof_pct = calculate_profiled_by_criteria(
-                group,
-                zone_area=zones.at[zone_id, "zone_area"],
-                criteria_list=criteria,
-                object_area_col="object_area"
-            ) if criteria else 0.0
+            criteria = mapping.get(zones.at[zone_id, "landuse_zone"], [])
+            prof_pct = (
+                calculate_profiled_by_criteria(
+                    group,
+                    zone_area=zones.at[zone_id, "zone_area"],
+                    criteria_list=criteria,
+                    object_area_col="object_area"
+                )
+                if criteria else 0.0
+            )
             total_pct = calculate_total_building_area(group, zones.loc[zone_id])
 
-            row = {
+            agg_list.append({
                 "zone_id": zone_id,
                 **pct.to_dict(),
                 "Процент профильных объектов": prof_pct,
                 "Любые здания /на зону": total_pct,
-            }
-            agg_list.append(row)
+            })
 
-        metrics_df = pd.DataFrame(agg_list).set_index("zone_id")
-
-        metric_cols = [
-            "ИЖС", "Малоэтажная", "Среднеэтажная", "Многоэтажная",
-            "Процент профильных объектов", "Любые здания /на зону"
-        ]
-        to_drop = [c for c in metric_cols if c in zones.columns]
-        if to_drop:
-            zones = zones.drop(columns=to_drop)
+        metrics_df = pd.DataFrame(agg_list)
+        if "zone_id" in metrics_df:
+            metrics_df = metrics_df.set_index("zone_id")
+        else:
+            metrics_df = pd.DataFrame(index=zones["zone_id"])
 
         result = zones.join(metrics_df, on="zone_id")
-
         for c in metric_cols:
             if c not in result.columns:
                 result[c] = 0.0
             result[c] = result[c].clip(0, 100)
 
-        return result.drop(columns=["zone_id", "zone_area"]).to_crs(landuse_polygons.crs)
+        return (
+            result
+            .drop(columns=["zone_id", "zone_area"])
+            .to_crs(zones_gdf.crs)
+        )
 
     return await asyncio.to_thread(
         _sync_bulk,
