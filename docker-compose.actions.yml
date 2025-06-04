@@ -1,0 +1,12 @@
+name: landuse_det
+services:
+  object_effects:
+    image: ${IMAGE}
+    container_name: ${CONTAINER_NAME}
+    ports:
+      - 8080:80
+    volumes:
+      - /var/essdata/__landuse_cache__:/app/__landuse_cache__
+    env_file:
+      - .env.development
+    restart: always

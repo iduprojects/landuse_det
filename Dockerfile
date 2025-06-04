@@ -9,7 +9,8 @@ ENV PYTHONUNBUFFERED=1
 
 # Enables env file
 ENV APP_ENV=development
-
+#add pyppi mirror to config
+COPY pip.conf /etc/xdg/pip/pip.conf
 # Install pip requirements
 COPY requirements.txt .
 RUN python -m pip install -r requirements.txt
