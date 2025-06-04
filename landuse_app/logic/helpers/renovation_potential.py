@@ -18,7 +18,7 @@ from ...exceptions.http_exception_wrapper import http_exception
 
 pandarallel.initialize(progress_bar=False, nb_workers=4)
 
-async def calculate_building_percentages(buildings_gdf: gpd.GeoDataFrame) -> pd.Series:
+def calculate_building_percentages(buildings_gdf: gpd.GeoDataFrame) -> pd.Series:
     """
     Filters residential buildings and calculates the percentage distribution by building categories.
 
@@ -215,6 +215,25 @@ async def analyze_geojson_for_renovation_potential(
 
     return landuse_polygons
 
+def _calc_building_percentages_core(storeys: np.ndarray) -> dict[str, float]:
+    """
+    Вход — чистый numpy-массив чисел этажности (float, без NaN).
+    Возвращает dict с четырьмя категориями.
+    """
+    if storeys.size == 0:
+        return {"ИЖС": 0, "Малоэтажная": 0, "Среднеэтажная": 0, "Многоэтажная": 0}
+
+    # бинарные границы
+    bins = np.array([0, 2, 4, 8, np.inf], dtype=float)
+    # получаем индексы корзин
+    idx = np.searchsorted(bins, storeys, side="right") - 1
+    counts = np.bincount(idx, minlength=4)
+    total = storeys.size
+    pct = counts / total * 100
+    return dict(zip(
+        ["ИЖС", "Малоэтажная", "Среднеэтажная", "Многоэтажная"],
+        pct
+    ))
 
 def calculate_building_percentages_optimized(buildings_gdf: gpd.GeoDataFrame) -> pd.Series:
     """
@@ -226,81 +245,64 @@ def calculate_building_percentages_optimized(buildings_gdf: gpd.GeoDataFrame) ->
     Returns:
     pd.Series: Series with percentages of categorized buildings.
     """
-    if buildings_gdf.empty or "storeys_count" not in buildings_gdf.columns or "object_type" not in buildings_gdf.columns:
+    if buildings_gdf.empty:
         return pd.Series({"ИЖС": 0, "Малоэтажная": 0, "Среднеэтажная": 0, "Многоэтажная": 0})
 
-    filtered_storeys = buildings_gdf.loc[
-        (buildings_gdf["object_type"] == "Жилой дом") & buildings_gdf["storeys_count"].notna(), "storeys_count"
-    ]
-
-    if filtered_storeys.empty:
-        return pd.Series({"ИЖС": 0, "Малоэтажная": 0, "Среднеэтажная": 0, "Многоэтажная": 0})
-
-    bins = [0, 2, 4, 8, float('inf')]
-    bin_indices = np.searchsorted(bins, filtered_storeys.values, side="right") - 1
-    bin_counts = np.bincount(bin_indices, minlength=len(bins) - 1)
-
-    total = len(filtered_storeys)
-    percentages = (bin_counts / total * 100)
-    labels = ["ИЖС", "Малоэтажная", "Среднеэтажная", "Многоэтажная"]
-    return pd.Series(dict(zip(labels, percentages)))
+    mask = (
+            (buildings_gdf["object_type"] == "Жилой дом") &
+            buildings_gdf["storeys_count"].notna()
+    )
+    arr = buildings_gdf.loc[mask, "storeys_count"].to_numpy(dtype=float)
+    result = _calc_building_percentages_core(arr)
+    return pd.Series(result)
 
 
 def calculate_profiled_by_criteria(
-    matches_gdf: gpd.GeoDataFrame,
-    zone_geometry: Polygon | MultiPolygon,
-    criteria_list: list[dict]
+        matches_df: pd.DataFrame,
+        zone_area: float,
+        criteria_list: list[dict],
+        object_area_col: str = "object_area"
 ) -> float:
     """
-    Calculate the percentage of a zone's area covered by features matching any of the given criteria.
-
-    This function takes a GeoDataFrame of features (`matches_gdf`), a target zone geometry
-    (`zone_geometry`), and a list of matching criteria. Each criterion is a dict that may
-    specify one or both of:
-      - `physical_object_type_id`: match against `matches_gdf["object_type_id"]`
-      - `service_type_id`:          match against `matches_gdf["service_id"]`
-
-    The percentage is computed as:
-        (total area of all matching features in the zone) / (zone area) * 100
+    Calculate the percentage of a zone’s area covered by objects matching given criteria.
 
     Args:
-        matches_gdf (gpd.GeoDataFrame):
-            GeoDataFrame containing feature geometries and at least the columns
-            `object_type_id` and `service_id`.
-        zone_geometry (Polygon or MultiPolygon):
-            The geometry of the zone within which to measure coverage.
-        criteria_list (list of dict):
-            A list of criteria dictionaries. Each dict may include the keys
-            `physical_object_type_id` and/or `service_type_id` to filter `matches_gdf`.
+        matches_df (pd.DataFrame):
+            DataFrame of candidate objects. Must include a column (default “object_area”)
+            with pre-computed area for each object in the same CRS as zone_area.
+        zone_area (float):
+            Total area of the zone (in same units as object_area).
+        criteria_list (list[dict]):
+            List of filter dictionaries. Each dict may contain keys:
+            - "physical_object_type_id" (optional)
+            - "service_type_id" (optional)
+        object_area_col (str, optional):
+            Name of the column in matches_df with each object’s area. Defaults to "object_area".
 
     Returns:
-        float: The percentage (0.0–100.0) of the zone's area covered by features
-               that satisfy any of the provided criteria. Returns 0.0 if the zone
-               is empty or no features match.
+        float:
+            Percentage of zone_area occupied by all objects matching **any** of the criteria
+            (i.e. union of both type- and service-based masks), clipped to [0, 100].
     """
-    if zone_geometry is None or zone_geometry.area == 0:
-        return 0.0
-    zone_area = zone_geometry.area
-
-    matched_indexes = set()
-    for crit in criteria_list:
-        mask = pd.Series(False, index=matches_gdf.index)
-        if crit.get("physical_object_type_id") is not None:
-            mask = matches_gdf["object_type_id"] == crit["physical_object_type_id"]
-        if crit.get("service_type_id") is not None:
-            mask |= matches_gdf["service_id"] == crit["service_type_id"]
-        matched_indexes.update(matches_gdf[mask].index.tolist())
-
-    if not matched_indexes:
+    if zone_area == 0 or matches_df.empty or not criteria_list:
         return 0.0
 
-    profiled_area = (
-        matches_gdf.loc[list(matched_indexes)]
-        .to_crs(epsg=3857)
-        .geometry.area
-        .sum()
-    )
+    # собираем все нужные id сразу
+    obj_ids = [c["physical_object_type_id"] for c in criteria_list if c.get("physical_object_type_id") is not None]
+    srv_ids = [c["service_type_id"] for c in criteria_list if c.get("service_type_id") is not None]
+
+    mask = pd.Series(False, index=matches_df.index)
+    if obj_ids:
+        mask |= matches_df["object_type_id"].isin(obj_ids)
+    if srv_ids:
+        mask |= matches_df["service_id"].isin(srv_ids)
+
+    if not mask.any():
+        return 0.0
+
+    profiled_area = matches_df.loc[mask, object_area_col].sum()
     return profiled_area / zone_area * 100.0
+
 
 async def process_zones_with_bulk_update(
     landuse_polygons: gpd.GeoDataFrame,
@@ -308,76 +310,104 @@ async def process_zones_with_bulk_update(
     zone_mapping: dict[str, list[dict]]
 ) -> gpd.GeoDataFrame:
     """
-    Asynchronously processes land-use zones and updates building metrics.
+    Asynchronously compute building metrics for each land-use zone and update the GeoDataFrame in bulk.
 
-    This function processes zones in the GeoDataFrame `landuse_polygons`, calculating
-    building percentages and area metrics for each zone using physical objects data.
-
-    Parameters:
-    -----------
-    landuse_polygons : gpd.GeoDataFrame
-        GeoDataFrame containing land-use zones to process.
-    physical_objects : gpd.GeoDataFrame
-        GeoDataFrame with physical object geometries and attributes.
-    physical_objects_sindex : rtree.index.Index
-        Spatial index for `physical_objects` to improve query performance.
-    zone_mapping :  dict[str, list[dict]]
-        Mapping of zone types to relevant profile types.
+    Args:
+        landuse_polygons (gpd.GeoDataFrame):
+            GeoDataFrame of land-use zones with a “geometry” column.
+        physical_objects (gpd.GeoDataFrame):
+            GeoDataFrame of physical objects (with geometry and attributes).
+        zone_mapping (dict[str, list[dict]]):
+            Mapping from landuse_zone names to lists of criteria dicts (as in calculate_profiled_by_criteria).
 
     Returns:
-    --------
-    gpd.GeoDataFrame
-        Updated `landuse_polygons` with calculated building percentages and area metrics.
+        gpd.GeoDataFrame:
+            The input landuse_polygons extended with columns:
+            - Building percentages by type (e.g. “ИЖС”, “Малоэтажная”, …)
+            - “Процент профильных объектов” (profiled area %)
+            - “Любые здания /на зону” (total building area %)
+            All percentage values are clipped to the [0, 100] range.
     """
-    def process_zone(row):
-        idx, zone = row.name, row
-        zone_gdf = gpd.GeoDataFrame([zone], geometry="geometry", crs=physical_objects.crs)
-        precise = gpd.sjoin(physical_objects, zone_gdf, how="inner", predicate="intersects")
+    def _sync_bulk(zones_gdf, phys_gdf, mapping):
+        utm_crs = zones_gdf.estimate_utm_crs()
+        phys = phys_gdf.to_crs(utm_crs).copy()
+        zones = zones_gdf.to_crs(utm_crs).copy().reset_index(drop=True)
 
-        percentages = calculate_building_percentages_optimized(precise)
+        zones["zone_area"] = zones.geometry.area
+        zones["zone_id"] = zones.index
+        metric_cols = [
+            "ИЖС","Малоэтажная","Среднеэтажная","Многоэтажная",
+            "Процент профильных объектов","Любые здания /на зону"
+        ]
+        drop_existing = [c for c in metric_cols if c in zones.columns]
+        if drop_existing:
+            zones = zones.drop(columns=drop_existing)
 
-        criteria_list = zone_mapping.get(zone["landuse_zone"], [])
-        profiled_area_pct = (
-            calculate_profiled_by_criteria(
-                precise,
-                zone.geometry,
-                criteria_list
-            ) if criteria_list else 0.0
+        phys["object_area"] = phys.geometry.area
+
+        joined = gpd.sjoin(
+            phys,
+            zones[["zone_id", "geometry"]],
+            how="inner",
+            predicate="intersects"
         )
 
-        total_area_pct = calculate_total_building_area(precise, zone)
+        if joined.empty:
+            result = zones.copy()
+            for c in metric_cols:
+                result[c] = 0.0
+            return (
+                result
+                .drop(columns=["zone_id", "zone_area"])
+                .to_crs(zones_gdf.crs)
+            )
 
-        return {
-            "idx": idx,
-            "percentages": percentages,
-            "profiled_area_percentage": profiled_area_pct,
-            "total_area_percentage": total_area_pct,
-        }
+        agg_list = []
+        for zone_id, group in joined.groupby("zone_id"):
+            pct = calculate_building_percentages(group)
+            criteria = mapping.get(zones.at[zone_id, "landuse_zone"], [])
+            prof_pct = (
+                calculate_profiled_by_criteria(
+                    group,
+                    zone_area=zones.at[zone_id, "zone_area"],
+                    criteria_list=criteria,
+                    object_area_col="object_area"
+                )
+                if criteria else 0.0
+            )
+            total_pct = calculate_total_building_area(group, zones.loc[zone_id])
 
-    async def parallel_proc():
-        return await asyncio.to_thread(
-            lambda: landuse_polygons.parallel_apply(process_zone, axis=1).tolist()
+            agg_list.append({
+                "zone_id": zone_id,
+                **pct.to_dict(),
+                "Процент профильных объектов": prof_pct,
+                "Любые здания /на зону": total_pct,
+            })
+
+        metrics_df = pd.DataFrame(agg_list)
+        if "zone_id" in metrics_df:
+            metrics_df = metrics_df.set_index("zone_id")
+        else:
+            metrics_df = pd.DataFrame(index=zones["zone_id"])
+
+        result = zones.join(metrics_df, on="zone_id")
+        for c in metric_cols:
+            if c not in result.columns:
+                result[c] = 0.0
+            result[c] = result[c].clip(0, 100)
+
+        return (
+            result
+            .drop(columns=["zone_id", "zone_area"])
+            .to_crs(zones_gdf.crs)
         )
 
-    results = await parallel_proc()
-
-    idx_list = [r["idx"] for r in results]
-    pct_df = pd.DataFrame([r["percentages"] for r in results])
-    prof_areas = [r["profiled_area_percentage"] for r in results]
-    tot_areas = [r["total_area_percentage"] for r in results]
-
-    cols = ["ИЖС", "Малоэтажная", "Среднеэтажная", "Многоэтажная"]
-    for c in cols:
-        if c not in landuse_polygons.columns:
-            landuse_polygons[c] = 0.0
-
-    landuse_polygons.loc[idx_list, cols] = pct_df.values
-    landuse_polygons.loc[idx_list, "Процент профильных объектов"] = prof_areas
-    landuse_polygons.loc[idx_list, "Любые здания /на зону"] = tot_areas
-    landuse_polygons["Процент профильных объектов"] = landuse_polygons["Процент профильных объектов"].clip(upper=100)
-    landuse_polygons["Любые здания /на зону"] = landuse_polygons["Любые здания /на зону"].clip(upper=100)
-
-    return landuse_polygons
+    return await asyncio.to_thread(
+        _sync_bulk,
+        landuse_polygons,
+        physical_objects,
+        zone_mapping
+    )
 
 
 async def get_renovation_potential(

@@ -540,7 +540,8 @@ class PreProcessingService:
                 'osm_type',
                 'capacity',
                 'fid'
-            ]
+            ],
+            errors='ignore'
         )
 
         return gdf
