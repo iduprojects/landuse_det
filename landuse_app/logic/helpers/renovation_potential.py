@@ -4,234 +4,21 @@ import geopandas as gpd
 import numpy as np
 import pandas as pd
 from loguru import logger
-from shapely import Polygon
-from shapely.geometry import shape
+from shapely import Polygon, MultiPolygon
 import asyncio
 from pandarallel import pandarallel
-import random
-
 from landuse_app.schemas import GeoJSON, Profile
 from storage.caching import caching_service
+from .interpretation_service import interpretation_service
+from .preprocessing_service import data_extraction
 from .spatial_methods import SpatialMethods
-from .urban_api_access import get_all_physical_objects_geometries, get_functional_zones_scenario_id, \
-    get_all_physical_objects_geometries_scen_id_percentages, get_functional_zones_scen_id_percentages, \
-    get_projects_base_scenario_id, get_functional_zone_sources
-from ..constants.constants import zone_mapping
+from .urban_api_access import get_projects_base_scenario_id, get_functional_zone_sources
+from ..constants.constants import actual_zone_mapping
 from ...exceptions.http_exception_wrapper import http_exception
 
 pandarallel.initialize(progress_bar=False, nb_workers=4)
 
-
-async def extract_physical_objects(project_id: int, is_context: bool, scenario_id_flag: bool = False) -> dict[str, gpd.GeoDataFrame]:
-    """
-    Extracts and processes physical objects for a given project, handling geometries and object attributes.
-
-    Parameters:
-    project_id : int
-        The ID of the project for which physical objects are to be extracted.
-    is_context : bool
-        A flag indicating whether to fetch context-based data.
-
-    Returns:
-    gpd.GeoDataFrame
-        A GeoDataFrame containing processed physical objects with valid geometries and relevant attributes.
-    """
-    logger.info("Физические объекты загружаются")
-    if scenario_id_flag:
-        physical_objects_response = await get_all_physical_objects_geometries_scen_id_percentages(project_id)
-    else:
-        physical_objects_response = await get_all_physical_objects_geometries(project_id, is_context)
-    physical_objects_data = physical_objects_response
-    all_data = []
-
-    for feature in physical_objects_data["features"]:
-        geometry = feature.get("geometry")
-        properties = feature["properties"]
-
-        try:
-            shapely_geometry = shape(geometry)
-            if not shapely_geometry.is_valid:
-                shapely_geometry = shapely_geometry.buffer(0)
-            if not shapely_geometry.is_valid or shapely_geometry.is_empty:
-                continue
-        except Exception as e:
-            logger.error(f"Ошибка при обработке геометрии: {e}")
-            continue
-
-        for physical_object in properties.get("physical_objects", []):
-            object_data = {
-                "physical_object_id": physical_object.get("physical_object_id"),
-                "object_type": physical_object.get("physical_object_type", {}).get("name", "Unknown"),
-                "object_type_id": physical_object.get("physical_object_type", {}).get("id"),
-                "name": physical_object.get("name", "(unnamed)"),
-                "geometry_type": shapely_geometry.geom_type if shapely_geometry else None,
-                "geometry": shapely_geometry,
-                "category": None,
-                "storeys_count": None,
-                "living_area": None,
-                "service_id": None,
-                "service_name": None,
-            }
-
-            if "building" in physical_object and physical_object["building"]:
-                building = physical_object["building"]
-                building_properties = building.get("properties", {})
-                osm_data = building_properties.get("osm_data", {})
-
-                floors = building.get("floors")
-                storeys_count = building_properties.get("storeys_count")
-                building_levels = osm_data.get("building:levels")
-
-                if floors:
-                    final_floors = floors
-                elif storeys_count:
-                    final_floors = storeys_count
-                elif building_levels:
-                    final_floors = int(building_levels)
-                else:
-                    final_floors = random.randint(2, 5)
-
-                object_data.update({
-                    "category": "residential",
-                    "storeys_count": final_floors,
-                    "living_area": building_properties.get("living_area_official") or building_properties.get(
-                        "living_area_modeled"),
-                    "address": building_properties.get("address", properties.get("address")),
-                })
-
-            elif physical_object.get("physical_object_type", {}).get("id") == 5:
-                services = properties.get("services", [])
-                if services:
-                    for service in services:
-                        service_id = service.get("service_type", {}).get("id", "Unknown")
-                        service_name = service.get("service_type", {}).get("name", "Unknown")
-                        is_capacity_real = service.get("is_capacity_real", None)
-                        object_data.update({
-                            "category": "non_residential",
-                            "service_id": service_id,
-                            "service_name": service_name,
-                            "is_capacity_real": is_capacity_real,
-                        })
-                        all_data.append(object_data.copy())
-                    continue
-
-                object_data.update({"category": "non_residential"})
-
-            elif physical_object.get("physical_object_type", {}).get("name") == "Рекреационная зона":
-                services = properties.get("services", [])
-                park_type = None
-                for service in services:
-                    if service.get("service_type", {}).get("name") == "Парк":
-                        park_type = "Парк"
-
-                object_data.update({
-                    "category": "recreational",
-                    "object_type": park_type or "Рекреационная зона",
-                })
-                all_data.append(object_data)
-                continue
-
-            else:
-                object_data.update({"category": "other"})
-
-            all_data.append(object_data)
-
-    logger.info("Физические объекты загружены")
-    all_data_df = pd.DataFrame(all_data)
-    all_data_gdf = gpd.GeoDataFrame(all_data_df, geometry="geometry", crs="EPSG:4326")
-    all_data_gdf = all_data_gdf.drop_duplicates(subset='physical_object_id')
-    all_data_gdf = all_data_gdf[all_data_gdf.geometry.type.isin(['Polygon', 'MultiPolygon'])]
-
-    water_objects_gdf = all_data_gdf[all_data_gdf['object_type'].isin(["Озеро", "Водный объект", "Река"])].to_crs(3857)
-    green_objects_gdf = all_data_gdf[all_data_gdf['object_type'].isin(["Травяное покрытие", "Зелёная зона"])].to_crs(
-        3857)
-    forests_gdf = all_data_gdf[all_data_gdf['object_type'].isin(["Лес"])].to_crs(3857)
-
-    return {
-        "physical_objects": all_data_gdf,
-        "water_objects": water_objects_gdf.area.sum(),
-        "green_objects": green_objects_gdf.area.sum(),
-        "forests": forests_gdf.area.sum()
-    }
-
-
-async def extract_landuse( project_id: int, is_context: bool, scenario_id_flag: bool = False, source: str = None,)\
-        -> gpd.GeoDataFrame:
-    """
-    Extracts functional zones polygons for a given project and returns them as a GeoDataFrame.
-
-    Parameters:
-    project_id : int
-        The ID of the project for which land use data is to be extracted.
-    is_context : bool
-        Flag to determine if context-specific functional zones should be fetched.
-
-    Returns:
-    gpd.GeoDataFrame
-        A GeoDataFrame containing land use polygons with relevant attributes.
-
-    Raises:
-    KeyError
-        If required keys are missing in the fetched data.
-    ValueError
-        If the input data is malformed or invalid.
-    """
-    if scenario_id_flag:
-        geojson_data = await get_functional_zones_scen_id_percentages(project_id)
-    else:
-        geojson_data = await get_functional_zones_scenario_id(project_id, is_context)
-    logger.info("Функциональные зоны загружаются")
-
-    features = geojson_data["features"]
-    geometries = []
-    for feature in features:
-        try:
-            geom = shape(feature["geometry"])
-            if not geom.is_valid:
-                geom = geom.buffer(0)
-            geometries.append(geom)
-        except Exception as e:
-            logger.error(f"Error processing geometry: {e}")
-            geometries.append(None)
-
-    properties = [feature["properties"] for feature in features]
-    landuse_polygons = gpd.GeoDataFrame(properties, geometry=geometries, crs="EPSG:4326")
-
-    if 'properties' in landuse_polygons.columns:
-        landuse_polygons['landuse_zone'] = landuse_polygons['properties'].apply(
-            lambda x: x.get('landuse_zon') if isinstance(x, dict) else None)
-
-    if 'functional_zone_type' in landuse_polygons.columns:
-        landuse_polygons['zone_type_id'] = landuse_polygons['functional_zone_type'].apply(
-            lambda x: x.get('id') if isinstance(x, dict) else None)
-        landuse_polygons['zone_type_name'] = landuse_polygons['functional_zone_type'].apply(
-            lambda x: x.get('name') if isinstance(x, dict) and x.get('name') != "unknown" else "residential"
-        )
-        landuse_polygons['zone_type_nickname'] = landuse_polygons['functional_zone_type'].apply(
-            lambda x: x.get('nickname') if isinstance(x, dict) and x.get('nickname') != "unknown" else "Жилая зона"
-        )
-
-    if "territory" in landuse_polygons.columns:
-        landuse_polygons['zone_type_parent_territory_id'] = landuse_polygons['territory'].apply(
-            lambda x: x.get('id') if isinstance(x, dict) else None)
-        landuse_polygons['zone_type_parent_territory_name'] = landuse_polygons['territory'].apply(
-            lambda x: x.get('name') if isinstance(x, dict) else None)
-
-    landuse_polygons.drop(
-        columns=['properties', 'functional_zone_type', 'territory', 'created_at', 'updated_at', 'zone_type_name'],
-        inplace=True, errors='ignore'
-    )
-
-    landuse_polygons.replace({
-        "zone_type_name": {"unknown": "residential"},
-        "zone_type_nickname": {"unknown": "Жилая зона"}
-    }, inplace=True)
-
-    logger.info("Функциональные зоны загружены")
-    return landuse_polygons
-
-
-async def calculate_building_percentages(buildings_gdf: gpd.GeoDataFrame) -> pd.Series:
+def calculate_building_percentages(buildings_gdf: gpd.GeoDataFrame) -> pd.Series:
     """
     Filters residential buildings and calculates the percentage distribution by building categories.
 
@@ -282,7 +69,8 @@ def calculate_profiled_building_area(
         The percentage of the zone's area covered by profiled buildings.
         If no buildings match the profile or the zone's area is zero, returns 0.
     """
-    if not hasattr(zone, "geometry") or not isinstance(zone.geometry, Polygon) or zone.geometry.area == 0:
+    if not hasattr(zone, "geometry") or not isinstance(zone.geometry,
+                                                       (Polygon, MultiPolygon)) or zone.geometry.area == 0:
         return 0
 
     zone_area = zone.geometry.area
@@ -343,20 +131,25 @@ async def assign_development_type(landuse_polygons: gpd.GeoDataFrame) -> gpd.Geo
     conditions = [
         (landuse_polygons["landuse_zone"] == "Residential") & (landuse_polygons["Многоэтажная"] > 30.00),
         (landuse_polygons["landuse_zone"] == "Residential") & (landuse_polygons["Среднеэтажная"] > 40.00),
+        (landuse_polygons["landuse_zone"] == "Special"),
 
-        (landuse_polygons["Процент профильных объектов"].isna()) | (landuse_polygons["Любые здания /на зону"] == 0.0),
+        (landuse_polygons["Процент профильных объектов"].isna()),
+        (landuse_polygons["Процент профильных объектов"] == 0.0),
         (landuse_polygons["Процент профильных объектов"] < 10.00),
         (landuse_polygons["Процент профильных объектов"] < 25.00),
         (landuse_polygons["Процент профильных объектов"] < 75.00),
         (landuse_polygons["Процент профильных объектов"] < 90.00),
+
         (landuse_polygons["Процент профильных объектов"] >= 90.00),
     ]
 
     urbanization_levels = [
-        "Высоко урбанизированная территория",  # Residential + Многоэтажная > 30%
-        "Высоко урбанизированная территория",  # Residential + Среднеэтажная > 40%
+        "Высоко урбанизированная территория",  # для Residential с Многоэтажной > 30%
+        "Высоко урбанизированная территория",  # для Residential с Среднеэтажной > 40%
+        "Высоко урбанизированная территория",  # для Special
 
-        "Мало урбанизированная территория",  # No data or 0%
+        "Мало урбанизированная территория",  # данных нет или 0
+        "Мало урбанизированная территория",
         "Мало урбанизированная территория",  # <10%
         "Слабо урбанизированная территория",  # <25%
         "Средне урбанизированная территория",  # <75%
@@ -387,7 +180,8 @@ async def analyze_geojson_for_renovation_potential(
     Returns:
     GeoDataFrame: Processed data with updated calculations and columns.
     """
-    landuse_polygons = landuse_polygons.to_crs(epsg=3857)
+    utm_crs = landuse_polygons.estimate_utm_crs()
+    landuse_polygons = landuse_polygons.to_crs(utm_crs)
     landuse_polygons["Площадь"] = landuse_polygons.geometry.area
     landuse_polygons["Потенциал"] = "Подлежащие реновации"
 
@@ -421,6 +215,25 @@ async def analyze_geojson_for_renovation_potential(
 
     return landuse_polygons
 
+def _calc_building_percentages_core(storeys: np.ndarray) -> dict[str, float]:
+    """
+    Вход — чистый numpy-массив чисел этажности (float, без NaN).
+    Возвращает dict с четырьмя категориями.
+    """
+    if storeys.size == 0:
+        return {"ИЖС": 0, "Малоэтажная": 0, "Среднеэтажная": 0, "Многоэтажная": 0}
+
+    # бинарные границы
+    bins = np.array([0, 2, 4, 8, np.inf], dtype=float)
+    # получаем индексы корзин
+    idx = np.searchsorted(bins, storeys, side="right") - 1
+    counts = np.bincount(idx, minlength=4)
+    total = storeys.size
+    pct = counts / total * 100
+    return dict(zip(
+        ["ИЖС", "Малоэтажная", "Среднеэтажная", "Многоэтажная"],
+        pct
+    ))
 
 def calculate_building_percentages_optimized(buildings_gdf: gpd.GeoDataFrame) -> pd.Series:
     """
@@ -432,111 +245,169 @@ def calculate_building_percentages_optimized(buildings_gdf: gpd.GeoDataFrame) ->
     Returns:
     pd.Series: Series with percentages of categorized buildings.
     """
-    if buildings_gdf.empty or "storeys_count" not in buildings_gdf.columns or "object_type" not in buildings_gdf.columns:
+    if buildings_gdf.empty:
         return pd.Series({"ИЖС": 0, "Малоэтажная": 0, "Среднеэтажная": 0, "Многоэтажная": 0})
 
-    filtered_storeys = buildings_gdf.loc[
-        (buildings_gdf["object_type"] == "Жилой дом") & buildings_gdf["storeys_count"].notna(), "storeys_count"
-    ]
+    mask = (
+            (buildings_gdf["object_type"] == "Жилой дом") &
+            buildings_gdf["storeys_count"].notna()
+    )
+    arr = buildings_gdf.loc[mask, "storeys_count"].to_numpy(dtype=float)
+    result = _calc_building_percentages_core(arr)
+    return pd.Series(result)
 
-    if filtered_storeys.empty:
-        return pd.Series({"ИЖС": 0, "Малоэтажная": 0, "Среднеэтажная": 0, "Многоэтажная": 0})
 
-    bins = [0, 2, 4, 8, float('inf')]
-    bin_indices = np.searchsorted(bins, filtered_storeys.values, side="right") - 1
-    bin_counts = np.bincount(bin_indices, minlength=len(bins) - 1)
+def calculate_profiled_by_criteria(
+        matches_df: pd.DataFrame,
+        zone_area: float,
+        criteria_list: list[dict],
+        object_area_col: str = "object_area"
+) -> float:
+    """
+    Calculate the percentage of a zone’s area covered by objects matching given criteria.
 
-    total = len(filtered_storeys)
-    percentages = (bin_counts / total * 100)
-    labels = ["ИЖС", "Малоэтажная", "Среднеэтажная", "Многоэтажная"]
-    return pd.Series(dict(zip(labels, percentages)))
+    Args:
+        matches_df (pd.DataFrame):
+            DataFrame of candidate objects. Must include a column (default “object_area”)
+            with pre-computed area for each object in the same CRS as zone_area.
+        zone_area (float):
+            Total area of the zone (in same units as object_area).
+        criteria_list (list[dict]):
+            List of filter dictionaries. Each dict may contain keys:
+            - "physical_object_type_id" (optional)
+            - "service_type_id" (optional)
+        object_area_col (str, optional):
+            Name of the column in matches_df with each object’s area. Defaults to "object_area".
+
+    Returns:
+        float:
+            Percentage of zone_area occupied by all objects matching **any** of the criteria
+            (i.e. union of both type- and service-based masks), clipped to [0, 100].
+    """
+    if zone_area == 0 or matches_df.empty or not criteria_list:
+        return 0.0
+
+    # собираем все нужные id сразу
+    obj_ids = [c["physical_object_type_id"] for c in criteria_list if c.get("physical_object_type_id") is not None]
+    srv_ids = [c["service_type_id"] for c in criteria_list if c.get("service_type_id") is not None]
+
+    mask = pd.Series(False, index=matches_df.index)
+    if obj_ids:
+        mask |= matches_df["object_type_id"].isin(obj_ids)
+    if srv_ids:
+        mask |= matches_df["service_id"].isin(srv_ids)
+
+    if not mask.any():
+        return 0.0
+
+    profiled_area = matches_df.loc[mask, object_area_col].sum()
+    return profiled_area / zone_area * 100.0
 
 
 async def process_zones_with_bulk_update(
     landuse_polygons: gpd.GeoDataFrame,
     physical_objects: gpd.GeoDataFrame,
-    zone_mapping: dict[str, list]
+    zone_mapping: dict[str, list[dict]]
 ) -> gpd.GeoDataFrame:
     """
-    Asynchronously processes land-use zones and updates building metrics.
+    Asynchronously compute building metrics for each land-use zone and update the GeoDataFrame in bulk.
 
-    This function processes zones in the GeoDataFrame `landuse_polygons`, calculating
-    building percentages and area metrics for each zone using physical objects data.
-
-    Parameters:
-    -----------
-    landuse_polygons : gpd.GeoDataFrame
-        GeoDataFrame containing land-use zones to process.
-    physical_objects : gpd.GeoDataFrame
-        GeoDataFrame with physical object geometries and attributes.
-    physical_objects_sindex : rtree.index.Index
-        Spatial index for `physical_objects` to improve query performance.
-    zone_mapping : dict
-        Mapping of zone types to relevant profile types.
+    Args:
+        landuse_polygons (gpd.GeoDataFrame):
+            GeoDataFrame of land-use zones with a “geometry” column.
+        physical_objects (gpd.GeoDataFrame):
+            GeoDataFrame of physical objects (with geometry and attributes).
+        zone_mapping (dict[str, list[dict]]):
+            Mapping from landuse_zone names to lists of criteria dicts (as in calculate_profiled_by_criteria).
 
     Returns:
-    --------
-    gpd.GeoDataFrame
-        Updated `landuse_polygons` with calculated building percentages and area metrics.
-
-    Workflow:
-    ---------
-    1. Processes each zone to calculate:
-        - Building percentages by type.
-        - Profiled building area percentage.
-        - Total building area percentage.
-    2. Updates the GeoDataFrame with calculated metrics using bulk updates.
-    3. Ensures all required columns exist and validates the result.
+        gpd.GeoDataFrame:
+            The input landuse_polygons extended with columns:
+            - Building percentages by type (e.g. “ИЖС”, “Малоэтажная”, …)
+            - “Процент профильных объектов” (profiled area %)
+            - “Любые здания /на зону” (total building area %)
+            All percentage values are clipped to the [0, 100] range.
     """
-    def process_zone(row):
-        """
-        Processes a single zone to calculate building percentages and area metrics.
-        """
-        idx, zone = row.name, row
-        zone_gdf = gpd.GeoDataFrame([zone], geometry="geometry", crs=physical_objects.crs)
-        precise_matches = gpd.sjoin(
-            physical_objects, zone_gdf, how="inner", predicate="intersects"
+    def _sync_bulk(zones_gdf, phys_gdf, mapping):
+        utm_crs = zones_gdf.estimate_utm_crs()
+        phys = phys_gdf.to_crs(utm_crs).copy()
+        zones = zones_gdf.to_crs(utm_crs).copy().reset_index(drop=True)
+
+        zones["zone_area"] = zones.geometry.area
+        zones["zone_id"] = zones.index
+        metric_cols = [
+            "ИЖС","Малоэтажная","Среднеэтажная","Многоэтажная",
+            "Процент профильных объектов","Любые здания /на зону"
+        ]
+        drop_existing = [c for c in metric_cols if c in zones.columns]
+        if drop_existing:
+            zones = zones.drop(columns=drop_existing)
+
+        phys["object_area"] = phys.geometry.area
+
+        joined = gpd.sjoin(
+            phys,
+            zones[["zone_id", "geometry"]],
+            how="inner",
+            predicate="intersects"
         )
-        percentages = calculate_building_percentages_optimized(precise_matches)
-        profile_types = zone_mapping.get(zone["landuse_zone"], [])
 
-        if profile_types:
-            profiled_area_percentage = calculate_profiled_building_area(precise_matches, zone, profile_types)
+        if joined.empty:
+            result = zones.copy()
+            for c in metric_cols:
+                result[c] = 0.0
+            return (
+                result
+                .drop(columns=["zone_id", "zone_area"])
+                .to_crs(zones_gdf.crs)
+            )
+
+        agg_list = []
+        for zone_id, group in joined.groupby("zone_id"):
+            pct = calculate_building_percentages(group)
+            criteria = mapping.get(zones.at[zone_id, "landuse_zone"], [])
+            prof_pct = (
+                calculate_profiled_by_criteria(
+                    group,
+                    zone_area=zones.at[zone_id, "zone_area"],
+                    criteria_list=criteria,
+                    object_area_col="object_area"
+                )
+                if criteria else 0.0
+            )
+            total_pct = calculate_total_building_area(group, zones.loc[zone_id])
+
+            agg_list.append({
+                "zone_id": zone_id,
+                **pct.to_dict(),
+                "Процент профильных объектов": prof_pct,
+                "Любые здания /на зону": total_pct,
+            })
+
+        metrics_df = pd.DataFrame(agg_list)
+        if "zone_id" in metrics_df:
+            metrics_df = metrics_df.set_index("zone_id")
         else:
-            profiled_area_percentage = 0
+            metrics_df = pd.DataFrame(index=zones["zone_id"])
 
-        total_area_percentage = calculate_total_building_area(precise_matches, zone)
+        result = zones.join(metrics_df, on="zone_id")
+        for c in metric_cols:
+            if c not in result.columns:
+                result[c] = 0.0
+            result[c] = result[c].clip(0, 100)
 
-        return {
-            "idx": idx,
-            "percentages": percentages,
-            "profiled_area_percentage": profiled_area_percentage,
-            "total_area_percentage": total_area_percentage,
-        }
+        return (
+            result
+            .drop(columns=["zone_id", "zone_area"])
+            .to_crs(zones_gdf.crs)
+        )
 
-    async def parallel_processing():
-        return await asyncio.to_thread(lambda: landuse_polygons.parallel_apply(process_zone, axis=1).tolist())
-    results = await parallel_processing()
-
-    idx_list = [result["idx"] for result in results]
-    percentages_df = pd.DataFrame([result["percentages"] for result in results])
-    profiled_areas = [result["profiled_area_percentage"] for result in results]
-    total_areas = [result["total_area_percentage"] for result in results]
-    required_columns = ["Многоэтажная", "ИЖС", "Малоэтажная", "Среднеэтажная"]
-    for col in required_columns:
-        if col not in landuse_polygons.columns:
-            landuse_polygons[col] = 0.0
-
-    landuse_polygons.loc[idx_list, ["ИЖС", "Малоэтажная", "Среднеэтажная", "Многоэтажная"]] = percentages_df.values
-    landuse_polygons.loc[idx_list, "Процент профильных объектов"] = profiled_areas
-    landuse_polygons.loc[idx_list, "Любые здания /на зону"] = total_areas
-    landuse_polygons["Процент профильных объектов"] = landuse_polygons["Процент профильных объектов"].clip(upper=100)
-    landuse_polygons["Любые здания /на зону"] = landuse_polygons["Любые здания /на зону"].clip(upper=100)
-
-    missing_columns = [col for col in required_columns if col not in landuse_polygons.columns]
-    if missing_columns:
-        raise ValueError(f"Columns still missing after update: {', '.join(missing_columns)}")
-    return landuse_polygons
+    return await asyncio.to_thread(
+        _sync_bulk,
+        landuse_polygons,
+        physical_objects,
+        zone_mapping
+    )
 
 
 async def get_renovation_potential(
@@ -590,12 +461,13 @@ async def get_renovation_potential(
         return gpd.GeoDataFrame.from_features(cached_data, crs="EPSG:4326")
 
     physical_objects_dict, landuse_polygons = await asyncio.gather(
-        extract_physical_objects(project_id, is_context),
-        extract_landuse(project_id, is_context, scenario_id, source)
+        data_extraction.extract_physical_objects(project_id, is_context),
+        data_extraction.extract_landuse(project_id, is_context, scenario_id, source)
     )
     physical_objects = physical_objects_dict["physical_objects"]
-    physical_objects = physical_objects.to_crs(epsg=3857)
-    landuse_polygons = landuse_polygons.to_crs(epsg=3857)
+    utm_crs = physical_objects.estimate_utm_crs()
+    physical_objects = physical_objects.to_crs(utm_crs)
+    landuse_polygons = landuse_polygons.to_crs(utm_crs)
 
     logger.info("Функциональные зоны и физические объекты получены")
     landuse_polygons = landuse_polygons[landuse_polygons.geometry.type.isin(['Polygon', 'MultiPolygon'])]
@@ -603,10 +475,8 @@ async def get_renovation_potential(
     landuse_polygons["Любые здания /на зону"] = 0.0
     logger.info("Функциональные зоны и физические объекты отфильтрованы")
 
-    physical_objects_sindex = physical_objects.sindex
-
     landuse_polygons = await process_zones_with_bulk_update(landuse_polygons, physical_objects,
-                                                            zone_mapping)
+                                                            actual_zone_mapping)
     logger.info("Проценты зданий посчитаны")
 
     landuse_polygons = await assign_development_type(landuse_polygons)
@@ -617,7 +487,18 @@ async def get_renovation_potential(
     landuse_polygons_ren_pot = await analyze_geojson_for_renovation_potential(landuse_polygons, profile_for_analysis)
     logger.info("Потенциал для реновации рассчитан")
 
-    zones = landuse_polygons_ren_pot.to_crs(3857)
+    zones = landuse_polygons_ren_pot.to_crs(utm_crs)
+    zones["Converted"] = None
+
+    oop_objects = physical_objects[physical_objects["service_id"] == 4]
+    if not oop_objects.empty:
+        oop_objects = oop_objects.to_crs(zones.crs)
+        oop_join = gpd.sjoin(zones, oop_objects, how="inner", predicate="intersects")
+        if not oop_join.empty:
+            oop_zone_ids = oop_join["functional_zone_id"].unique()
+            zones.loc[zones["functional_zone_id"].isin(oop_zone_ids), "Потенциал"] = "Не подлежащие реновации"
+            zones.loc[zones["functional_zone_id"].isin(oop_zone_ids), "Процент урбанизации"] = "Высоко урбанизированная территория"
+
     non_renovated = zones[pd.isna(zones['Потенциал'])]
     buffered_geometries = non_renovated.buffer(300)
     buffered_gdf = gpd.GeoDataFrame(geometry=buffered_geometries, crs=zones.crs)
@@ -657,7 +538,10 @@ async def get_renovation_potential(
     grouped = joined.groupby(joined.index)['intersection_area'].sum()
     final_overlap_ratio = grouped / renovated.loc[grouped.index].geometry.area
     to_update = final_overlap_ratio[final_overlap_ratio > 0.50].index
-    zones.loc[to_update, 'Потенциал'] = 'Не подлежащие реновации'
+    mask_renovation = zones.index.isin(to_update)
+    zones.loc[mask_renovation & zones['Потенциал'].notnull(), 'Потенциал'] = \
+        'Не подлежащие реновации'
+    zones.loc[to_update, 'Converted'] = True
     landuse_polygons_ren_pot = zones.to_crs(epsg=4326)
 
     result_json = json.loads(landuse_polygons_ren_pot.to_json())
@@ -685,16 +569,17 @@ async def filter_response(polygons_gdf: gpd.GeoDataFrame, filter_type: bool = Fa
         "Любые здания /на зону": "Доля любых объектов на территории",
         "Застройка": "Доминирующий тип застройки",
         "Площадь": "Площадь",
-        "Процент урбанизации": "Уровень урбанизации",
         "Потенциал": "Потенциал реновации"
     }
 
     if filter_type: # реновация
         required_columns = [
             "Тип землепользования",
-            "Площадь",
             "Уровень урбанизации",
+            "Пояснение уровня урбанизации",
             "Потенциал реновации",
+            "Пояснение потенциала реновации",
+            "Площадь",
             "geometry"
         ]
         polygons_gdf = polygons_gdf.rename(columns=columns_mapping)
@@ -705,6 +590,7 @@ async def filter_response(polygons_gdf: gpd.GeoDataFrame, filter_type: bool = Fa
         required_columns = [
             "Тип землепользования",
             "Уровень урбанизации",
+            "Пояснение уровня урбанизации",
             "Площадь",
             "geometry"
         ]
@@ -729,18 +615,19 @@ async def calculate_zone_percentages(scenario_id: int, is_context: bool = False,
     """
     if scenario_id:
         physical_objects_dict, landuse_polygons = await asyncio.gather(
-            extract_physical_objects(scenario_id, is_context, True),
-            extract_landuse(scenario_id, is_context, True, source)
+            data_extraction.extract_physical_objects(scenario_id, is_context, True),
+            data_extraction.extract_landuse(scenario_id, is_context, True, source)
         )
     else:
         physical_objects_dict, landuse_polygons = await asyncio.gather(
-            extract_physical_objects(scenario_id, is_context),
-            extract_landuse(scenario_id, is_context, False, source)
+            data_extraction.extract_physical_objects(scenario_id, is_context),
+            data_extraction.extract_landuse(scenario_id, is_context, False, source)
         )
     water_objects = physical_objects_dict["water_objects"]
     green_objects = physical_objects_dict["green_objects"]  # новое
     forests = physical_objects_dict["forests"]  # новое
-    landuse_polygons = landuse_polygons.to_crs(epsg=3857)
+    utm_crs = landuse_polygons.estimate_utm_crs()
+    landuse_polygons = landuse_polygons.to_crs(utm_crs)
 
     landuse_polygons["landuse_zone"] = landuse_polygons["landuse_zone"].replace({None: "Residential", "null": "Residential"}).fillna("Residential")
     landuse_polygons["area"] = landuse_polygons.geometry.area
@@ -799,6 +686,8 @@ async def get_projects_renovation_potential(project_id: int, source: str = None)
         if "Неудобия" in landuse_polygons.columns and not landuse_polygons["Неудобия"].isna().iloc[0]
         else None
     )
+    landuse_polygons = await interpretation_service.interpret_urbanization_value(landuse_polygons)
+    landuse_polygons = await interpretation_service.interpret_renovation_value(landuse_polygons)
     landuse_polygons = await filter_response(landuse_polygons, True)
     geojson = GeoJSON.from_geodataframe(landuse_polygons)
 
@@ -812,13 +701,17 @@ async def get_projects_renovation_potential(project_id: int, source: str = None)
 
 async def get_projects_urbanization_level(project_id: int, source: str = None) -> GeoJSON:
     """Calculate urbanization level for project."""
+    logger.info(f"Calculating urbanization level for project {project_id}")
     landuse_polygons = await get_renovation_potential(project_id, is_context=False, source=source)
+    landuse_polygons = await interpretation_service.interpret_urbanization_value(landuse_polygons)
+    landuse_polygons = await interpretation_service.interpret_renovation_value(landuse_polygons)
     landuse_polygons = await filter_response(landuse_polygons)
     return GeoJSON.from_geodataframe(landuse_polygons)
 
 
 async def get_projects_context_renovation_potential(project_id: int, source: str = None) -> dict:
     """Calculate renovation potential for project's context."""
+    logger.info(f"Calculating renovation potential for project {project_id}")
     landuse_polygons = await get_renovation_potential(project_id, is_context=True, source=source)
 
     discomfort_value = (
@@ -826,6 +719,8 @@ async def get_projects_context_renovation_potential(project_id: int, source: str
         if "Неудобия" in landuse_polygons.columns and not landuse_polygons["Неудобия"].isna().iloc[0]
         else None
     )
+    landuse_polygons = await interpretation_service.interpret_urbanization_value(landuse_polygons)
+    landuse_polygons = await interpretation_service.interpret_renovation_value(landuse_polygons)
     landuse_polygons = await filter_response(landuse_polygons, True)
     geojson = GeoJSON.from_geodataframe(landuse_polygons)
 
@@ -839,11 +734,15 @@ async def get_projects_context_renovation_potential(project_id: int, source: str
 
 async def get_projects_context_urbanization_level(project_id: int, source: str = None) -> GeoJSON:
     """Calculate urbanization level for project's context."""
+    logger.info(f"Calculating urbanization level for project {project_id}")
     landuse_polygons = await get_renovation_potential(project_id, is_context=True, source=source)
+    landuse_polygons = await interpretation_service.interpret_urbanization_value(landuse_polygons)
+    landuse_polygons = await interpretation_service.interpret_renovation_value(landuse_polygons)
     landuse_polygons = await filter_response(landuse_polygons)
     return GeoJSON.from_geodataframe(landuse_polygons)
 
 
 async def get_projects_landuse_parts_scen_id_main_method(scenario_id: int, source: str = None) -> dict:
+    logger.info(f"Calculating landuse parts for scenario {scenario_id}")
     landuse_parts = await calculate_zone_percentages(scenario_id, source=source)
     return landuse_parts

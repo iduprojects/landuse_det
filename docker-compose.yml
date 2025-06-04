@@ -1,4 +1,4 @@
-version: '3.4'
+name: landuse_det
 
 services:
   landuse_det:
@@ -8,3 +8,5 @@ services:
       dockerfile: ./Dockerfile
     ports:
       - 80:80
+    volumes:
+      - ./__landuse_cache__:/app/__landuse_cache__
